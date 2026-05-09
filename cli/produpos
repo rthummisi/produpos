@@ -60,13 +60,13 @@ sleep 0.5
 
 # Start backend
 cd "$PRODUPOOS_ROOT"
-PYTHONPATH="$PRODUPOOS_ROOT/backend" \
+mkdir -p "$PRODUPOOS_ROOT/backend/app/logs"
+PYTHONPATH="$PRODUPOOS_ROOT" \
   "$VENV/bin/uvicorn" backend.app.main:app \
   --host 0.0.0.0 \
   --port "$BACKEND_PORT" \
-  --reload \
   --log-level warning \
-  &>> "$PRODUPOOS_ROOT/backend/app/logs/backend.log" &
+  >> "$PRODUPOOS_ROOT/backend/app/logs/backend.log" 2>&1 &
 BACKEND_PID=$!
 
 # Wait for backend
@@ -83,7 +83,7 @@ done
 
 # Start frontend
 cd "$PRODUPOOS_ROOT/frontend"
-npm run dev &>> "$PRODUPOOS_ROOT/backend/app/logs/frontend.log" &
+npm run dev >> "$PRODUPOOS_ROOT/backend/app/logs/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 
 # Wait for frontend
