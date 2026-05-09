@@ -23,14 +23,19 @@ export default function Dashboard() {
   const [health, setHealth] = useState(null)
   const [products, setProducts] = useState([])
   const [scanning, setScanning] = useState(false)
+  const [updating, setUpdating] = useState(false)
+  const [dryRun, setDryRun] = useState(false)
   const [runs, setRuns] = useState([])
+  const [runStarted, setRunStarted] = useState(false)
   const nav = useNavigate()
 
-  useEffect(() => {
+  const load = () => {
     api.health().then(setHealth).catch(() => {})
     api.products().then(setProducts).catch(() => {})
     api.runs().then(setRuns).catch(() => {})
-  }, [])
+  }
+
+  useEffect(() => { load() }, [])
 
   const handleScan = async () => {
     setScanning(true)
@@ -42,12 +47,29 @@ export default function Dashboard() {
     }
   }
 
+  const handleUpdateAll = async () => {
+    setUpdating(true)
+    setRunStarted(false)
+    try {
+      await api.startRun(null, dryRun)
+      setRunStarted(true)
+      setTimeout(() => nav('/console'), 600)
+    } catch (e) {
+      alert('Failed to start run: ' + e.message)
+    } finally {
+      setUpdating(false)
+    }
+  }
+
   const updatable = products.filter(p => p.updatable && !p.skip_persistent)
   const skipped = products.filter(p => !p.updatable || p.skip_persistent)
+  const autoCount = updatable.filter(p => p.mode !== 'manual').length
+  const manualCount = updatable.filter(p => p.mode === 'manual').length
   const lastRun = runs[0]
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
+      {/* Header */}
       <div className="mb-8 flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">ProdupOS</h1>
@@ -69,23 +91,18 @@ export default function Dashboard() {
           <button
             onClick={handleScan}
             disabled={scanning}
-            className="px-4 py-2 text-sm font-medium bg-gray-900 text-white dark:bg-white dark:text-gray-900 rounded-xl hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className="px-4 py-2 text-sm font-medium border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50 transition-colors"
           >
             {scanning ? 'Scanning...' : 'Scan Projects'}
-          </button>
-          <button
-            onClick={() => nav('/review')}
-            className="px-4 py-2 text-sm font-medium border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-          >
-            Review & Run
           </button>
         </div>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <Stat label="Total Products" value={products.length} />
-        <Stat label="Updatable" value={updatable.length} color="green" />
+        <Stat label="Updatable" value={updatable.length} color="green"
+          sub={updatable.length > 0 ? `${autoCount} auto · ${manualCount} manual` : undefined} />
         <Stat label="Skipped" value={skipped.length} color="amber" />
         <Stat
           label="Last Run"
@@ -95,7 +112,49 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* Products preview */}
+      {/* Update All action bar */}
+      {updatable.length > 0 && (
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 px-6 py-5 mb-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium text-gray-900 dark:text-white mb-1">
+                Update All Products
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                {autoCount > 0 && <span className="mr-3">⚡ {autoCount} auto</span>}
+                {manualCount > 0 && <span className="mr-3">✏️ {manualCount} manual</span>}
+                <span className="text-gray-400">· Each product runs in its own mode</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={dryRun}
+                  onChange={e => setDryRun(e.target.checked)}
+                  className="rounded border-gray-300 dark:border-gray-600"
+                />
+                Dry run
+              </label>
+              <button
+                onClick={() => nav('/review')}
+                className="px-4 py-2 text-sm border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+              >
+                Review first
+              </button>
+              <button
+                onClick={handleUpdateAll}
+                disabled={updating || runStarted}
+                className="px-5 py-2 text-sm font-medium bg-gray-900 text-white dark:bg-white dark:text-gray-900 rounded-xl hover:opacity-90 disabled:opacity-50 transition-opacity"
+              >
+                {runStarted ? 'Started ✓' : updating ? 'Starting...' : `Update all ${updatable.length}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Products list */}
       {products.length > 0 && (
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
           <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
@@ -105,22 +164,31 @@ export default function Dashboard() {
             </button>
           </div>
           <div className="divide-y divide-gray-50 dark:divide-gray-800">
-            {products.slice(0, 6).map(p => (
+            {products.map(p => (
               <div key={p.id} className="px-6 py-3.5 flex items-center justify-between">
-                <div>
-                  <span className="text-sm font-medium text-gray-900 dark:text-white">{p.name}</span>
-                  <span className="ml-2 text-xs text-gray-400">{p.detected_stack || 'Unknown stack'}</span>
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="text-sm font-medium text-gray-900 dark:text-white truncate">{p.name}</span>
+                  <span className="text-xs text-gray-400 shrink-0">{p.detected_stack || 'Unknown stack'}</span>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2.5 shrink-0">
                   {p.current_version && (
-                    <span className="text-xs text-gray-400">v{p.current_version}</span>
+                    <span className="text-xs text-gray-400 font-mono">v{p.current_version}</span>
+                  )}
+                  {p.updatable && !p.skip_persistent && (
+                    <span className={`text-xs px-2 py-0.5 rounded-md ${
+                      p.mode === 'manual'
+                        ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400'
+                        : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+                    }`}>
+                      {p.mode === 'manual' ? '✏️ manual' : '⚡ auto'}
+                    </span>
                   )}
                   <span className={`text-xs px-2 py-0.5 rounded-full ${
                     p.updatable && !p.skip_persistent
                       ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
                       : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500'
                   }`}>
-                    {p.skip_persistent ? 'Skipped (persistent)' : p.updatable ? 'Updatable' : p.skip_reason || 'Skip'}
+                    {p.skip_persistent ? 'Skipped always' : p.updatable ? 'Updatable' : p.skip_reason || 'Skip'}
                   </span>
                 </div>
               </div>

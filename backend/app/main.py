@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
+from pydantic import BaseModel as _BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -166,6 +167,33 @@ def analyze_product(product_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"health": health, "dependencies": dep_report}
 
+
+class BulkModeRequest(_BaseModel):
+    product_ids: Optional[List[str]] = None
+    mode: str
+
+class SetSelectedRequest(_BaseModel):
+    selected: bool
+
+@app.post("/api/bulk/products/mode")
+def bulk_set_mode(req: BulkModeRequest, db: Session = Depends(get_db)):
+    query = db.query(Product).filter(Product.updatable == True)
+    if req.product_ids:
+        query = query.filter(Product.id.in_(req.product_ids))
+    products = query.all()
+    for p in products:
+        p.mode = req.mode
+    db.commit()
+    return {"updated": len(products), "mode": req.mode}
+
+@app.post("/api/products/{product_id}/selected")
+def set_selected(product_id: str, req: SetSelectedRequest, db: Session = Depends(get_db)):
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        raise HTTPException(404)
+    p.selected = req.selected
+    db.commit()
+    return {"selected": p.selected}
 
 @app.post("/api/products/{product_id}/propose")
 def propose_feature(product_id: str, db: Session = Depends(get_db)):
