@@ -114,6 +114,32 @@ echo -e "  Frontend PID: ${FRONTEND_PID}"
 echo ""
 echo -e "  Logs: ${PRODUPOOS_ROOT}/backend/app/logs/"
 echo ""
+
+# Wait for guardian scan then show summary
+echo -n "  Guardian scan"
+for i in {1..30}; do
+  GUARDIAN=$(curl -sf "${BACKEND_URL}/health" 2>/dev/null | python3 -c "import json,sys; h=json.load(sys.stdin); g=h.get('guardian',{}); print('ready' if g.get('ready') else 'pending')" 2>/dev/null)
+  if [ "$GUARDIAN" = "ready" ]; then
+    echo ""
+    SUMMARY=$(curl -sf "${BACKEND_URL}/health" 2>/dev/null | python3 -c "
+import json,sys
+h=json.load(sys.stdin)
+g=h.get('guardian',{})
+parts=[]
+if g.get('new_products',0)>0: parts.append(f\"{g['new_products']} new product(s)\")
+if g.get('versions_synced',0)>0: parts.append(f\"{g['versions_synced']} version(s) synced\")
+if g.get('tags_created',0)>0: parts.append(f\"{g['tags_created']} tag(s) created\")
+if g.get('changelogs_created',0)>0: parts.append(f\"{g['changelogs_created']} changelog(s) created\")
+if g.get('errors',0)>0: parts.append(f\"{g['errors']} error(s)\")
+print(', '.join(parts) if parts else 'all products clean')
+" 2>/dev/null)
+    echo -e "${GREEN}✓ Guardian:${NC} ${SUMMARY}"
+    break
+  fi
+  echo -n "."
+  sleep 1
+done
+echo ""
 echo -e "  Press ${YELLOW}Ctrl+C${NC} to stop ProdupOS"
 echo ""
 

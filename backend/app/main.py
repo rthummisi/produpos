@@ -40,6 +40,7 @@ app.add_middleware(
 )
 
 _scheduler_task = None
+_guardian_report: dict = {}
 
 
 @app.on_event("startup")
@@ -48,6 +49,19 @@ async def startup():
     if settings.enable_scheduler:
         global _scheduler_task
         _scheduler_task = asyncio.create_task(scheduler_loop())
+    # Run guardian in background — don't block server startup
+    asyncio.create_task(_run_guardian_background())
+
+
+async def _run_guardian_background():
+    global _guardian_report
+    import asyncio as _asyncio
+    loop = _asyncio.get_event_loop()
+    from .startup_guardian import run_startup_guardian
+    try:
+        _guardian_report = await loop.run_in_executor(None, run_startup_guardian)
+    except Exception as e:
+        _guardian_report = {"error": str(e)}
 
 
 @app.on_event("shutdown")
@@ -60,6 +74,7 @@ async def shutdown():
 
 @app.get("/health")
 def health():
+    guardian_summary = _guardian_report.get("summary", {})
     return {
         "status": "ok",
         "version": "1.0.0",
@@ -67,7 +82,26 @@ def health():
         "projects_root": settings.projects_root,
         "ai_enabled": bool(settings.anthropic_api_key),
         "dry_run": settings.dry_run,
+        "guardian": {
+            "ready": bool(_guardian_report),
+            "new_products": guardian_summary.get("new_detected", 0),
+            "versions_synced": guardian_summary.get("versions_synced", 0) + guardian_summary.get("versions_created", 0),
+            "tags_created": guardian_summary.get("tags_created", 0),
+            "changelogs_created": guardian_summary.get("changelogs_created", 0),
+            "errors": guardian_summary.get("errors", 0),
+        },
     }
+
+
+@app.get("/api/guardian")
+def get_guardian_report():
+    return _guardian_report or {"status": "guardian scan in progress — check back shortly"}
+
+
+@app.post("/api/guardian/run")
+async def trigger_guardian():
+    asyncio.create_task(_run_guardian_background())
+    return {"status": "guardian scan triggered"}
 
 
 # ─── Scan ─────────────────────────────────────────────────────────────────────

@@ -19,6 +19,69 @@ function Stat({ label, value, sub, color = 'gray' }) {
   )
 }
 
+function GuardianPanel({ guardian, onRerun }) {
+  const [running, setRunning] = useState(false)
+  if (!guardian) return null
+
+  const rerun = async () => {
+    setRunning(true)
+    try { await api.runGuardian() } finally { setRunning(false) }
+  }
+
+  const hasNews = guardian.new_products > 0 || guardian.versions_synced > 0 ||
+                  guardian.tags_created > 0 || guardian.changelogs_created > 0
+
+  return (
+    <div className={`rounded-2xl border px-5 py-4 mb-6 ${
+      guardian.errors > 0
+        ? 'bg-red-50 border-red-100 dark:bg-red-900/10 dark:border-red-900/30'
+        : hasNews
+          ? 'bg-blue-50 border-blue-100 dark:bg-blue-900/10 dark:border-blue-900/20'
+          : 'bg-emerald-50 border-emerald-100 dark:bg-emerald-900/10 dark:border-emerald-900/20'
+    }`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className="text-base">{guardian.errors > 0 ? '⚠️' : hasNews ? '🔄' : '✅'}</span>
+          <div>
+            <div className="text-sm font-medium text-gray-900 dark:text-white">
+              Guardian {guardian.ready ? 'scan complete' : 'scanning...'}
+            </div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap gap-3">
+              {guardian.new_products > 0 && (
+                <span className="text-blue-700 dark:text-blue-400 font-medium">
+                  {guardian.new_products} new product{guardian.new_products !== 1 ? 's' : ''} detected
+                </span>
+              )}
+              {guardian.versions_synced > 0 && (
+                <span>{guardian.versions_synced} version{guardian.versions_synced !== 1 ? 's' : ''} synced</span>
+              )}
+              {guardian.tags_created > 0 && (
+                <span>{guardian.tags_created} tag{guardian.tags_created !== 1 ? 's' : ''} created</span>
+              )}
+              {guardian.changelogs_created > 0 && (
+                <span>{guardian.changelogs_created} CHANGELOG{guardian.changelogs_created !== 1 ? 's' : ''} created</span>
+              )}
+              {guardian.errors > 0 && (
+                <span className="text-red-600 dark:text-red-400">{guardian.errors} error{guardian.errors !== 1 ? 's' : ''}</span>
+              )}
+              {!hasNews && guardian.errors === 0 && guardian.ready && (
+                <span>All products clean ✓</span>
+              )}
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={rerun}
+          disabled={running}
+          className="text-xs text-gray-500 dark:text-gray-400 hover:underline disabled:opacity-50"
+        >
+          {running ? 'Running...' : 'Re-run'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function Dashboard() {
   const [health, setHealth] = useState(null)
   const [products, setProducts] = useState([])
@@ -27,15 +90,33 @@ export default function Dashboard() {
   const [dryRun, setDryRun] = useState(false)
   const [runs, setRuns] = useState([])
   const [runStarted, setRunStarted] = useState(false)
+  const [guardian, setGuardian] = useState(null)
   const nav = useNavigate()
 
   const load = () => {
-    api.health().then(setHealth).catch(() => {})
+    api.health().then(h => {
+      setHealth(h)
+      if (h.guardian) setGuardian(h.guardian)
+    }).catch(() => {})
     api.products().then(setProducts).catch(() => {})
     api.runs().then(setRuns).catch(() => {})
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    // Poll guardian until it's ready
+    const poll = setInterval(() => {
+      api.health().then(h => {
+        if (h.guardian?.ready) {
+          setGuardian(h.guardian)
+          clearInterval(poll)
+          // refresh products after guardian scan
+          api.products().then(setProducts).catch(() => {})
+        }
+      }).catch(() => {})
+    }, 3000)
+    return () => clearInterval(poll)
+  }, [])
 
   const handleScan = async () => {
     setScanning(true)
@@ -97,6 +178,9 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* Guardian status */}
+      <GuardianPanel guardian={guardian} onRerun={load} />
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">

@@ -53,6 +53,9 @@ export const api = {
 
   settings: () => req('GET', '/api/settings'),
   updateSetting: (key, value) => req('POST', '/api/settings', { key, value }),
+
+  guardian: () => req('GET', '/api/guardian'),
+  runGuardian: () => req('POST', '/api/guardian/run'),
 }
 
 export function createWebSocket(jobId, onMessage) {
