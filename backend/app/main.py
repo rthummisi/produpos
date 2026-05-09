@@ -76,14 +76,25 @@ def scan(db: Session = Depends(get_db)):
     roots = settings.get_all_roots()
     raw_products = scan_projects(roots)
 
-    # Persist/update products in DB
+    # Build set of current scanned paths so we can evict stale DB rows
+    current_paths = {rp["path"] for rp in raw_products}
+
+    # Remove products whose path no longer exists in the scan
+    # (preserves products with run history or user-set skip_persistent)
+    all_db_products = db.query(Product).all()
+    for dbp in all_db_products:
+        if dbp.path not in current_paths and not dbp.skip_persistent:
+            has_runs = db.query(RunItem).filter(RunItem.product_id == dbp.id).first()
+            if not has_runs:
+                db.delete(dbp)
+    db.commit()
+
+    # Upsert current scan results
     result = []
     for rp in raw_products:
         pid = str(uuid.uuid5(uuid.NAMESPACE_URL, rp["path"]))
         existing = db.query(Product).filter(Product.id == pid).first()
-
         git_status_str = rp.get("repo_status", "unknown")
-        git_info = rp.get("git_status", {})
 
         if existing:
             if existing.skip_persistent:
