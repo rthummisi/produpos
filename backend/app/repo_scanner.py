@@ -181,6 +181,42 @@ def classify_product(path: Path, name: str, skip_persistent: bool = False) -> Di
     return result
 
 
+def _has_product_structure(path: Path) -> bool:
+    """Quick check: does this dir have any product indicators at its root?"""
+    items = _get_top_level_items(path)
+    files = set(items["files"])
+    dirs = set(items["dirs"])
+    return (
+        any(f in files for f in PRODUCT_INDICATORS)
+        or any(d in dirs for d in PRODUCT_DIRS)
+        or (path / ".git").exists()
+    )
+
+
+def _find_nested_products(wrapper: Path, seen_paths: set, self_name: str) -> List[Dict]:
+    """When a top-level folder has no product structure, look one level deeper."""
+    nested = []
+    try:
+        for subdir in sorted(wrapper.iterdir()):
+            if not subdir.is_dir():
+                continue
+            if subdir.name.startswith("."):
+                continue
+            if subdir.name in SKIP_DIRS:
+                continue
+            if subdir.name.lower() in {self_name.lower(), "produpos", "produps"}:
+                continue
+            if str(subdir) in seen_paths:
+                continue
+            if _has_product_structure(subdir):
+                seen_paths.add(str(subdir))
+                product = classify_product(subdir, subdir.name)
+                nested.append(product)
+    except PermissionError:
+        pass
+    return nested
+
+
 def scan_projects(roots: List[Path], self_name: str = "ProdUPOS") -> List[Dict]:
     products = []
     seen_paths = set()
@@ -205,7 +241,16 @@ def scan_projects(roots: List[Path], self_name: str = "ProdUPOS") -> List[Dict]:
             if str(entry) in seen_paths:
                 continue
             seen_paths.add(str(entry))
+
             product = classify_product(entry, entry.name)
+
+            if not product["updatable"] and "wrapper" in product.get("skip_reason", "").lower():
+                # This is a wrapper folder — search one level deeper for real products
+                nested = _find_nested_products(entry, seen_paths, self_name)
+                if nested:
+                    products.extend(nested)
+                    continue  # don't add the wrapper itself
+
             products.append(product)
 
     return products
