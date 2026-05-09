@@ -339,6 +339,15 @@ def run_startup_guardian() -> Dict:
         new = _upsert_products(db, scanned)
         report["new_products"] = new
 
+        # Always sanitize ProdupOS itself first
+        self_path = settings.get_produpOS_root()
+        try:
+            self_result = sanitize_product(str(self_path), "ProdupOS")
+            self_result["is_self"] = True
+            report["sanitization"].insert(0, self_result)
+        except Exception as e:
+            report["errors"].append({"product": "ProdupOS", "error": str(e)})
+
         # Sanitize versions for all updatable products
         for rp in scanned:
             if not rp.get("updatable"):

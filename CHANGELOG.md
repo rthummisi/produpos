@@ -1,5 +1,70 @@
 # ProdupOS Changelog
 
+## [1.1.0] — 2026-05-09
+
+### Added — Startup Guardian
+- `startup_guardian.py`: runs automatically on every `produpos` launch
+- Scans `~/Downloads/Projects` for **new product folders** not yet in the DB — new products are added and appear in the UI with no manual scan needed
+- **Version sanitization** for every product on startup:
+  - Version file behind git tag → syncs file to match tag, commits, pushes
+  - Git tag behind version file → creates annotated tag and pushes
+  - No version anywhere → writes `0.1.0`, tags HEAD, pushes
+  - Missing `CHANGELOG.md` → creates one automatically
+- All fixes auto-committed with `chore(guardian): sanitize version` and pushed to each product's remote
+- Guardian report saved to `data/guardian/guardian-YYYYMMDD-HHMMSS.json`
+- `GET /api/guardian` — full guardian report
+- `POST /api/guardian/run` — trigger manual re-run
+- **Dashboard guardian panel**: colour-coded status bar (green = clean, blue = changes made, red = errors); auto-polls until ready; "Re-run" button
+- **CLI output**: shows guardian summary after startup (`✓ Guardian: 2 version(s) synced, 1 new product(s) detected`)
+- ProdupOS self-included in guardian sanity (version + tag + clean state)
+
+### Added — Update All (Auto + Manual)
+- Dashboard: "Update all N" button runs all products in their current mode without going to Review
+- Breakdown shows `⚡ N auto · ✏️ N manual` before running
+- Feature Review: bulk "⚡ All auto" / "✏️ All manual" buttons switch all products at once
+- Per-product checkbox to include/exclude from a run; "Select: All / None" toggles
+- Run button shows live breakdown: `Update 6 products · ⚡ 4 auto · ✏️ 2 manual`
+- `POST /api/bulk/products/mode` — set mode for all updatable products in one call
+- `POST /api/products/{id}/selected` — toggle per-product run inclusion
+
+### Changed — Version Bumping
+- Switched from **patch** bumps (`1.0.0 → 1.0.1`) to **minor** bumps (`1.0.0 → 1.1.0`) for all AI-implemented features
+- Patch reset to 0 on minor bump: `2.3.5 → 2.4.0`
+- No version → starts at `0.1.0`
+
+### Added — Git Push on Update
+- After every product update: push the `produpos/update-*` branch to `origin`
+- `push_branch()` returns `(bool, message)` — push result visible in Run Console logs
+- Gracefully skips push if no remote configured
+
+### Fixed — Dirty Repo Stash Flow
+- Before implementation: `git stash push --include-untracked` saves user's WIP
+- Implementation runs on clean HEAD → new branch → commit → push
+- After push: `git checkout original-branch` → `git stash pop` (user's work restored)
+- Snapshot restored on any failure at any step
+
+### Fixed — Dashboard Versions
+- Scan endpoint now reads `current_version` from filesystem for every product
+- Versions displayed immediately after Scan (no separate "Analyze" step)
+- Dashboard products table: Product | Stack | Version | Mode | Status columns
+
+### Fixed — Nested Product Discovery
+- Wrapper folders (e.g. `ARMORS/` containing `armors-repo/`) are now handled correctly
+- When a top-level folder has no product indicators, scanner looks one level deeper
+- `armors-repo` correctly detected as Docker + Full-Stack, updatable
+
+### Fixed — Stale Product Eviction
+- On every scan, DB products whose path no longer exists in the filesystem are deleted
+- Prevents ghost entries from old scans appearing in the UI
+- Preserves products with run history or `skip_persistent = true`
+
+### Fixed — CLI Script
+- `&>>` after `\` line continuation caused a bash syntax error — replaced with `>> file 2>&1 &`
+- `PYTHONPATH` corrected from `backend/` to project root (required for `backend.app.main` import)
+- `mkdir -p` added for logs directory to prevent startup failure on first run
+
+---
+
 ## [1.0.0] — 2026-05-08
 
 ### Initial Major Release
