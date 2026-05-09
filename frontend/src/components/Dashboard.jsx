@@ -163,34 +163,36 @@ export default function Dashboard() {
               View all →
             </button>
           </div>
+          {/* Table header */}
+          <div className="px-6 py-2 grid grid-cols-12 gap-2 border-b border-gray-50 dark:border-gray-800">
+            <span className="col-span-4 text-xs font-medium text-gray-400 uppercase tracking-wider">Product</span>
+            <span className="col-span-3 text-xs font-medium text-gray-400 uppercase tracking-wider">Stack</span>
+            <span className="col-span-2 text-xs font-medium text-gray-400 uppercase tracking-wider">Version</span>
+            <span className="col-span-1 text-xs font-medium text-gray-400 uppercase tracking-wider">Mode</span>
+            <span className="col-span-2 text-xs font-medium text-gray-400 uppercase tracking-wider">Status</span>
+          </div>
           <div className="divide-y divide-gray-50 dark:divide-gray-800">
             {products.map(p => (
-              <div key={p.id} className="px-6 py-3.5 flex items-center justify-between">
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="text-sm font-medium text-gray-900 dark:text-white truncate">{p.name}</span>
-                  <span className="text-xs text-gray-400 shrink-0">{p.detected_stack || 'Unknown stack'}</span>
-                </div>
-                <div className="flex items-center gap-2.5 shrink-0">
-                  {p.current_version && (
-                    <span className="text-xs text-gray-400 font-mono">v{p.current_version}</span>
-                  )}
+              <div key={p.id} className="px-6 py-3 grid grid-cols-12 gap-2 items-center hover:bg-gray-50/50 dark:hover:bg-gray-800/20 transition-colors">
+                <span className="col-span-4 text-sm font-medium text-gray-900 dark:text-white truncate">{p.name}</span>
+                <span className="col-span-3 text-xs text-gray-400 truncate">{p.detected_stack || '—'}</span>
+                <span className="col-span-2 text-xs font-mono font-medium text-gray-700 dark:text-gray-300">
+                  {p.current_version ? `v${p.current_version}` : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                </span>
+                <span className="col-span-1">
                   {p.updatable && !p.skip_persistent && (
-                    <span className={`text-xs px-2 py-0.5 rounded-md ${
-                      p.mode === 'manual'
-                        ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400'
-                        : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
-                    }`}>
-                      {p.mode === 'manual' ? '✏️ manual' : '⚡ auto'}
-                    </span>
+                    <span className="text-xs">{p.mode === 'manual' ? '✏️' : '⚡'}</span>
                   )}
+                </span>
+                <span className="col-span-2">
                   <span className={`text-xs px-2 py-0.5 rounded-full ${
                     p.updatable && !p.skip_persistent
                       ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
                       : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500'
                   }`}>
-                    {p.skip_persistent ? 'Skipped always' : p.updatable ? 'Updatable' : p.skip_reason || 'Skip'}
+                    {p.skip_persistent ? 'Skipped' : p.updatable ? 'Ready' : 'Skip'}
                   </span>
-                </div>
+                </span>
               </div>
             ))}
           </div>

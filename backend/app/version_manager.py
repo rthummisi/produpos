@@ -4,20 +4,20 @@ from pathlib import Path
 from typing import Optional
 
 
-def _bump_patch(version: str) -> str:
+def _bump_minor(version: str) -> str:
     try:
         parts = version.strip().lstrip("v").split(".")
         parts = [p for p in parts if p.isdigit()]
-        if len(parts) == 3:
-            parts[2] = str(int(parts[2]) + 1)
-            return ".".join(parts)
-        elif len(parts) == 2:
-            return f"{parts[0]}.{parts[1]}.1"
+        if len(parts) >= 2:
+            parts[1] = str(int(parts[1]) + 1)
+            if len(parts) >= 3:
+                parts[2] = "0"
+            return ".".join(parts[:3] if len(parts) >= 3 else parts)
         elif len(parts) == 1:
-            return f"{parts[0]}.0.1"
+            return f"{parts[0]}.1.0"
     except Exception:
         pass
-    return "0.1.1"
+    return "0.1.0"
 
 
 def get_version_from_package_json(path: Path) -> Optional[str]:
@@ -109,7 +109,7 @@ def bump_version(product_path: str) -> tuple[str, str]:
     if not old:
         new = "0.1.0"
     else:
-        new = _bump_patch(old)
+        new = _bump_minor(old)
 
     update_version_files(product_path, old, new)
     return old, new

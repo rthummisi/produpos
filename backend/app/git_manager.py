@@ -1,8 +1,7 @@
 import subprocess
-import os
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from .config import settings
 
 
@@ -21,6 +20,32 @@ def _run_git(args: List[str], cwd: str, timeout: int = 30) -> Dict:
         return {"ok": False, "stdout": "", "stderr": str(e)}
 
 
+def has_remote(product_path: str) -> bool:
+    result = _run_git(["remote"], product_path)
+    return result["ok"] and bool(result["stdout"].strip())
+
+
+def get_current_branch(product_path: str) -> str:
+    result = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], product_path)
+    return result["stdout"] if result["ok"] else "main"
+
+
+def stash_dirty(product_path: str) -> str:
+    """Stash all uncommitted changes. Returns stash ref name or '' if nothing stashed."""
+    result = _run_git(
+        ["stash", "push", "--include-untracked", "-m", "produpos-pre-update"],
+        product_path
+    )
+    if result["ok"] and "No local changes" not in result["stdout"] and result["stdout"]:
+        return "stash@{0}"
+    return ""
+
+
+def pop_stash(product_path: str) -> bool:
+    result = _run_git(["stash", "pop"], product_path)
+    return result["ok"]
+
+
 def create_branch(product_path: str, product_name: str) -> str:
     if not settings.allow_git_branch_creation:
         return ""
@@ -33,11 +58,14 @@ def create_branch(product_path: str, product_name: str) -> str:
     return ""
 
 
+def checkout_branch(product_path: str, branch: str) -> bool:
+    result = _run_git(["checkout", branch], product_path)
+    return result["ok"]
+
+
 def stage_files(product_path: str, file_paths: List[str]) -> bool:
     for fp in file_paths:
-        result = _run_git(["add", fp], product_path)
-        if not result["ok"]:
-            return False
+        _run_git(["add", fp], product_path)
     return True
 
 
@@ -45,6 +73,7 @@ def commit_changes(
     product_path: str,
     feature_title: str,
     product_name: str,
+    version_before: str,
     version_after: str,
     files_changed: List[str],
 ) -> str:
@@ -56,7 +85,7 @@ def commit_changes(
         f"Feature: {feature_title}\n"
         f"Why: Auto-implemented by ProdupOS for high customer impact.\n"
         f"Files: {', '.join(files_changed)}\n"
-        f"Version: {version_after}"
+        f"Version: {version_before or 'none'} → {version_after}"
     )
     message = f"{subject}\n\n{body}"
 
@@ -65,6 +94,16 @@ def commit_changes(
         sha_result = _run_git(["rev-parse", "--short", "HEAD"], product_path)
         return sha_result["stdout"] if sha_result["ok"] else ""
     return ""
+
+
+def push_branch(product_path: str, branch: str) -> Tuple[bool, str]:
+    """Push branch to origin. Returns (success, message)."""
+    if not has_remote(product_path):
+        return False, "no remote configured"
+    result = _run_git(["push", "-u", "origin", branch], product_path, timeout=60)
+    if result["ok"]:
+        return True, f"pushed to origin/{branch}"
+    return False, result["stderr"][:200]
 
 
 def get_remote_url(product_path: str) -> Optional[str]:
@@ -86,18 +125,13 @@ def create_github_pr(
         return None
 
     remote_url = get_remote_url(product_path)
-    if not remote_url:
+    if not remote_url or "github.com" not in remote_url:
         return None
 
-    # Parse owner/repo from remote URL
-    owner_repo = None
-    if "github.com" in remote_url:
-        parts = remote_url.rstrip(".git").split("github.com")[-1].strip("/").split("/")
-        if len(parts) >= 2:
-            owner_repo = f"{parts[0]}/{parts[1]}"
-
-    if not owner_repo:
+    parts = remote_url.rstrip(".git").split("github.com")[-1].strip("/").split("/")
+    if len(parts) < 2:
         return None
+    owner_repo = f"{parts[0]}/{parts[1]}"
 
     try:
         import httpx
@@ -118,18 +152,10 @@ def create_github_pr(
         }
         resp = httpx.post(
             f"https://api.github.com/repos/{owner_repo}/pulls",
-            json=payload,
-            headers=headers,
-            timeout=30,
+            json=payload, headers=headers, timeout=30,
         )
         if resp.status_code == 201:
             return resp.json().get("html_url")
     except Exception:
         pass
-
     return None
-
-
-def push_branch(product_path: str, branch: str) -> bool:
-    result = _run_git(["push", "-u", "origin", branch], product_path)
-    return result["ok"]

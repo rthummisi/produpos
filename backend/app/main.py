@@ -91,11 +91,14 @@ def scan(db: Session = Depends(get_db)):
     db.commit()
 
     # Upsert current scan results
+    from .version_manager import get_current_version as _get_ver
     result = []
     for rp in raw_products:
         pid = str(uuid.uuid5(uuid.NAMESPACE_URL, rp["path"]))
         existing = db.query(Product).filter(Product.id == pid).first()
         git_status_str = rp.get("repo_status", "unknown")
+        # Read version from filesystem on every scan so dashboard is always fresh
+        live_version = _get_ver(rp["path"]) or ""
 
         if existing:
             if existing.skip_persistent:
@@ -106,6 +109,7 @@ def scan(db: Session = Depends(get_db)):
             existing.skip_reason = rp.get("skip_reason", "")
             existing.git_status = git_status_str
             existing.code_confidence_score = rp.get("code_confidence_score", 0.0)
+            existing.current_version = live_version
             existing.updated_at = datetime.utcnow()
             db.commit()
             result.append(existing)
@@ -119,7 +123,7 @@ def scan(db: Session = Depends(get_db)):
                 skip_reason=rp.get("skip_reason", ""),
                 git_status=git_status_str,
                 code_confidence_score=rp.get("code_confidence_score", 0.0),
-                current_version="",
+                current_version=live_version,
             )
             db.add(p)
             db.commit()

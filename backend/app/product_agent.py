@@ -11,7 +11,11 @@ from .schemas import FeatureProposal, FileChange
 from .safety import create_snapshot, restore_snapshot, pre_run_safety_check, get_git_status
 from .feature_planner import propose_feature_with_ai
 from .implementation_runner import generate_implementation_with_ai, apply_implementation, verify_implementation
-from .git_manager import create_branch, stage_files, commit_changes, create_github_pr, push_branch
+from .git_manager import (
+    create_branch, checkout_branch, stage_files, commit_changes,
+    push_branch, create_github_pr, stash_dirty, pop_stash,
+    get_current_branch, has_remote,
+)
 from .version_manager import get_current_version, bump_version
 from .changelog_manager import update_changelog, write_product_update_doc
 from .job_manager import append_log
@@ -115,25 +119,25 @@ class ProductAgent:
     async def _execute(self):
         self.log("Analyzing repository...")
 
-        # Safety check
         git_info = get_git_status(self.path)
-        safety = pre_run_safety_check(self.path, git_info, not self.override_dirty)
-        if not safety["ok"] and not self.override_dirty:
-            self.run_item.status = "skipped"
-            self.run_item.reason = "; ".join(safety["blockers"])
-            self.run_item.completed_at = datetime.utcnow()
-            self.db.commit()
-            self.log(f"Skipped: {self.run_item.reason}")
-            return
+        is_git = git_info.get("is_git", False)
+        original_branch = git_info.get("branch", "main") if is_git else ""
+        stash_ref = ""
 
-        for w in safety.get("warnings", []):
-            self.log(f"Warning: {w}")
+        # Stash any pre-existing dirty changes so we branch from clean HEAD
+        if is_git and git_info.get("dirty"):
+            self.log(f"Repo is dirty ({len(git_info.get('modified', []))} files) — stashing before update...")
+            stash_ref = stash_dirty(self.path)
+            if stash_ref:
+                self.log("Pre-existing changes stashed — will restore after update")
+                git_info = get_git_status(self.path)  # recheck after stash
+            else:
+                self.log("Nothing stashed (stash may have been empty)")
 
-        # Get version before
         version_before = get_current_version(self.path)
         self.run_item.version_before = version_before
 
-        # Load proposal
+        # Load / generate proposal
         mode = self.product.mode
         if mode == "manual" and self.product.manual_feature:
             self.log("Using manual feature specification...")
@@ -145,6 +149,7 @@ class ProductAgent:
                 self._get_existing_features(),
                 manual_override=self.product.manual_feature,
             )
+            self.total_tokens += tokens
         else:
             self.log("Loading auto-proposed feature...")
             try:
@@ -172,21 +177,22 @@ class ProductAgent:
         )
         self.total_tokens += tokens
 
-        # Store diff preview
         diffs = [{"path": fc.path, "diff": fc.diff, "action": fc.action} for fc in file_changes]
         self.run_item.diff_preview = json.dumps(diffs)
         self.run_item.file_changes = json.dumps([fc.model_dump() for fc in file_changes])
         self.db.commit()
 
         if self.dry_run:
-            self.log("Dry run mode — skipping file writes")
+            self.log("Dry run — skipping writes")
+            if stash_ref:
+                self._restore_stash(original_branch, stash_ref)
             self.run_item.status = "dry_run_complete"
             self.run_item.completed_at = datetime.utcnow()
             self._update_cost(self.total_tokens)
             self.db.commit()
             return
 
-        # Create snapshot
+        # Snapshot before writes
         snap_data = create_snapshot(self.path, [fc.model_dump() for fc in file_changes])
         snap = Snapshot(
             id=f"snap-{self.run_item.id}",
@@ -196,7 +202,7 @@ class ProductAgent:
         )
         self.db.add(snap)
         self.db.commit()
-        self.log(f"Snapshot created for {len(snap_data)} files")
+        self.log(f"Snapshot saved for {len(snap_data)} files")
 
         # Apply implementation
         self.log("Writing files...")
@@ -206,18 +212,19 @@ class ProductAgent:
             )
             self.run_item.partial_state = True
             self.db.commit()
-            self.log(f"Applied {len(applied)} file changes: {', '.join(applied)}")
+            self.log(f"Applied: {', '.join(applied)}")
         except Exception as e:
-            self.log(f"Implementation failed: {e}")
+            self.log(f"Write failed: {e}")
             self.run_item.status = "failed"
             self.run_item.reason = str(e)
             self._restore_if_snapshot()
+            self._restore_stash(original_branch, stash_ref)
             self.run_item.completed_at = datetime.utcnow()
             self.db.commit()
             return
 
-        # Post-implementation verification
-        self.log("Verifying implementation...")
+        # Verify
+        self.log("Verifying...")
         verification = verify_implementation(self.path, file_changes)
         self.run_item.verification_result = json.dumps(verification)
         self.db.commit()
@@ -225,27 +232,25 @@ class ProductAgent:
         if not verification["ok"]:
             self.log("Verification failed — restoring snapshot")
             self.run_item.status = "failed"
-            self.run_item.reason = "Post-implementation verification failed"
+            self.run_item.reason = "Verification failed"
             self._restore_if_snapshot()
+            self._restore_stash(original_branch, stash_ref)
             self.run_item.completed_at = datetime.utcnow()
             self.db.commit()
             return
 
         self.log("Verification passed")
 
-        # Version bump
-        self.log("Bumping version...")
+        # Minor version bump
+        self.log("Bumping minor version...")
         old_ver, new_ver = bump_version(self.path)
         self.run_item.version_before = old_ver
         self.run_item.version_after = new_ver
         self.db.commit()
         self.log(f"Version: {old_ver or 'none'} → {new_ver}")
 
-        # Update changelog
-        self.log("Updating changelog...")
+        # Changelog + update doc
         update_changelog(self.path, new_ver, proposal)
-
-        # Write PRODUCT_UPDATE.md
         files_changed_names = [fc.path for fc in file_changes]
         write_product_update_doc(
             self.path, self.product.name,
@@ -253,45 +258,62 @@ class ProductAgent:
         )
         self.log("PRODUCT_UPDATE.md written")
 
-        # Git operations
+        # Git: branch → stage → commit → push → return to original branch
         branch = ""
         commit_sha = ""
         pr_url = ""
+        push_ok = False
 
-        if git_info.get("is_git") and settings.allow_git_commits:
-            self.log("Creating git branch...")
+        if is_git and settings.allow_git_commits:
+            self.log("Creating update branch...")
             branch = create_branch(self.path, self.product.name)
             if branch:
                 self.log(f"Branch: {branch}")
 
-            all_changed = applied + ["CHANGELOG.md", "PRODUCT_UPDATE.md"]
-            version_files = ["package.json", "pyproject.toml", "VERSION"]
-            for vf in version_files:
-                if (Path(self.path) / vf).exists():
-                    all_changed.append(vf)
+            all_changed = list(set(
+                applied
+                + ["CHANGELOG.md", "PRODUCT_UPDATE.md"]
+                + [vf for vf in ["package.json", "pyproject.toml", "VERSION"]
+                   if (Path(self.path) / vf).exists()]
+            ))
 
-            stage_files(self.path, list(set(all_changed)))
+            stage_files(self.path, all_changed)
             commit_sha = commit_changes(
                 self.path, proposal.feature_title,
-                self.product.name, new_ver, all_changed
+                self.product.name, old_ver, new_ver, all_changed
             )
             if commit_sha:
                 self.log(f"Committed: {commit_sha}")
 
-            if settings.allow_github_pr and branch and commit_sha:
-                self.log("Creating GitHub PR...")
+            # Push to remote
+            if commit_sha:
+                push_success, push_msg = push_branch(self.path, branch)
+                push_ok = push_success
+                self.log(f"Push: {push_msg}")
+
+            # GitHub PR (optional)
+            if settings.allow_github_pr and branch and commit_sha and push_ok:
+                self.log("Opening GitHub PR...")
                 pr_url = create_github_pr(
-                    self.path, branch, git_info.get("branch", "main"),
+                    self.path, branch, original_branch,
                     proposal.feature_title, self.product.name,
                     proposal.why_this_matters,
                 ) or ""
                 if pr_url:
-                    self.log(f"PR created: {pr_url}")
+                    self.log(f"PR: {pr_url}")
 
-        # Update feature backlog
+            # Return to original branch, pop user's stash
+            if branch and original_branch:
+                checkout_branch(self.path, original_branch)
+                self.log(f"Returned to {original_branch}")
+
+        # Restore user's pre-existing dirty files
+        self._restore_stash(original_branch, stash_ref)
+
+        # Update product version in DB
+        self.product.current_version = new_ver
         self._update_backlog(proposal)
 
-        # Finalize
         self.run_item.status = "updated"
         self.run_item.git_branch = branch
         self.run_item.git_commit = commit_sha
@@ -301,7 +323,20 @@ class ProductAgent:
         self._update_cost(self.total_tokens)
         self.db.commit()
 
-        self.log(f"Done. Version {new_ver} — {proposal.feature_title}")
+        self.log(f"Done ✓  v{old_ver or '?'} → v{new_ver} · {proposal.feature_title}")
+
+    def _restore_stash(self, original_branch: str, stash_ref: str):
+        if not stash_ref:
+            return
+        try:
+            if original_branch:
+                checkout_branch(self.path, original_branch)
+            if pop_stash(self.path):
+                self.log("Pre-existing changes restored (stash popped)")
+            else:
+                self.log("Warning: stash pop failed — check git stash list manually")
+        except Exception as e:
+            self.log(f"Stash restore error: {e}")
 
     def _update_cost(self, tokens: int):
         self.run_item.tokens_used = tokens
