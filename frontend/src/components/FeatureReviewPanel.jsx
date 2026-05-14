@@ -3,10 +3,10 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../api.js'
 
 function formatLastUpdated(value) {
-  if (!value) return 'Never'
+  if (!value) return 'Not updated yet'
   const normalized = /z$/i.test(value) ? value : `${value}Z`
   const date = new Date(normalized)
-  if (Number.isNaN(date.getTime())) return 'Never'
+  if (Number.isNaN(date.getTime())) return 'Not updated yet'
   return date.toLocaleString([], {
     timeZone: 'America/Los_Angeles',
     year: 'numeric',
@@ -223,7 +223,9 @@ function ProductCard({ product, onRefresh }) {
               {Math.round(product.health_score * 100)}% health
             </span>
           )}
-          <span className="text-xs text-gray-400">Updated {formatLastUpdated(product.last_update_at)}</span>
+          <span className="text-xs text-gray-400">
+            {product.last_update_at ? `Updated ${formatLastUpdated(product.last_update_at)}` : 'Not updated yet'}
+          </span>
           <span className="text-xs text-gray-400">{product.git_status}</span>
         </div>
       </div>
