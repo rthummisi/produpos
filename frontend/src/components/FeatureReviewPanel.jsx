@@ -111,6 +111,10 @@ function ProductCard({ product, onRefresh }) {
   let proposal = null
   try { if (product.proposed_feature_json) proposal = JSON.parse(product.proposed_feature_json) }
   catch {}
+  const builtFeatureIsCurrentProposal =
+    !!proposal &&
+    !!product.last_built_feature_title &&
+    proposal.feature_title === product.last_built_feature_title
 
   const saveManual = async (value = manualFeature) => {
     setSavingManual(true)
@@ -293,11 +297,13 @@ function ProductCard({ product, onRefresh }) {
 
         <div>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Proposed Feature</span>
+            <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+              {builtFeatureIsCurrentProposal ? 'Next Feature Proposal' : 'Proposed Feature'}
+            </span>
             <div className="flex gap-3">
               <button onClick={propose} disabled={proposing}
                 className="text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50">
-                {proposing ? 'Proposing...' : 'Re-propose'}
+                {proposing ? 'Proposing...' : builtFeatureIsCurrentProposal ? 'Propose next' : 'Re-propose'}
               </button>
               <button onClick={() => setShowBacklog(true)} className="text-xs text-gray-400 hover:underline">
                 Backlog
@@ -311,7 +317,18 @@ function ProductCard({ product, onRefresh }) {
           {proposalStatus && (
             <div className="mb-2 text-xs text-gray-400">{proposalStatus}</div>
           )}
-          {proposal ? (
+          {builtFeatureIsCurrentProposal ? (
+            <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20 p-4 space-y-2">
+              <div className="text-xs font-medium uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                Last built successfully
+              </div>
+              <div className="font-medium text-sm text-gray-900 dark:text-white">{product.last_built_feature_title}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">{formatLastUpdated(product.last_built_feature_at)}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                This feature is already built. Use `Propose next` to generate the next update idea.
+              </div>
+            </div>
+          ) : proposal ? (
             <div className="rounded-xl bg-gray-50 dark:bg-gray-800 p-4 space-y-2">
               <div className="font-medium text-sm text-gray-900 dark:text-white">{proposal.feature_title}</div>
               <div className="text-xs text-gray-500 dark:text-gray-400">{proposal.customer_problem}</div>
