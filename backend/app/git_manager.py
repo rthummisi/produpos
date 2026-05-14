@@ -46,6 +46,27 @@ def pop_stash(product_path: str) -> bool:
     return result["ok"]
 
 
+def stage_all(product_path: str) -> bool:
+    result = _run_git(["add", "-A"], product_path)
+    return result["ok"]
+
+
+def has_staged_changes(product_path: str) -> bool:
+    result = _run_git(["diff", "--cached", "--name-only"], product_path)
+    return result["ok"] and bool(result["stdout"].strip())
+
+
+def commit_all_changes(product_path: str, message: str) -> str:
+    stage_all(product_path)
+    if not has_staged_changes(product_path):
+        return ""
+    result = _run_git(["commit", "-m", message], product_path)
+    if result["ok"]:
+        sha_result = _run_git(["rev-parse", "--short", "HEAD"], product_path)
+        return sha_result["stdout"] if sha_result["ok"] else ""
+    return ""
+
+
 def create_branch(product_path: str, product_name: str) -> str:
     if not settings.allow_git_branch_creation:
         return ""
@@ -61,6 +82,13 @@ def create_branch(product_path: str, product_name: str) -> str:
 def checkout_branch(product_path: str, branch: str) -> bool:
     result = _run_git(["checkout", branch], product_path)
     return result["ok"]
+
+
+def cherry_pick_commit(product_path: str, commit_sha: str) -> Tuple[bool, str]:
+    result = _run_git(["cherry-pick", commit_sha], product_path, timeout=60)
+    if result["ok"]:
+        return True, result["stdout"] or commit_sha
+    return False, result["stderr"] or "cherry-pick failed"
 
 
 def stage_files(product_path: str, file_paths: List[str]) -> bool:

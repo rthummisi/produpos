@@ -3,18 +3,21 @@ import csv
 import io
 import json
 import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+from xml.etree import ElementTree
 
-from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, UploadFile, File
 from pydantic import BaseModel as _BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from .config import settings
-from .db import get_db, init_db
+from .config import settings, apply_setting_override
+from .ai_clients import any_ai_provider_configured, provider_status
+from .db import get_db, init_db, SessionLocal
 from .models import Product, Run, RunItem, Snapshot, FeatureBacklogItem, ScheduledRun, Setting
 from .schemas import (
     ProductOut, RunOut, RunItemOut, SnapshotOut, FeatureBacklogItemOut, ScheduledRunOut,
@@ -43,9 +46,55 @@ _scheduler_task = None
 _guardian_report: dict = {}
 
 
+def _product_to_out(db: Session, product: Product) -> ProductOut:
+    latest_update = db.query(RunItem.completed_at).filter(
+        RunItem.product_id == product.id,
+        RunItem.status == "updated",
+        RunItem.completed_at.isnot(None),
+    ).order_by(RunItem.completed_at.desc()).first()
+    payload = ProductOut.model_validate(product).model_dump()
+    payload["last_update_at"] = latest_update[0] if latest_update else product.updated_at
+    return ProductOut(**payload)
+
+
+def _normalize_manual_feature_text(text: str, max_chars: int = 12000) -> str:
+    cleaned = "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").replace("\r", "\n").splitlines())
+    cleaned = "\n".join(line for line in cleaned.splitlines() if line.strip() or line == "")
+    return cleaned.strip()[:max_chars]
+
+
+def _extract_manual_feature_from_upload(upload: UploadFile) -> str:
+    suffix = Path(upload.filename or "").suffix.lower()
+    raw = upload.file.read()
+
+    if suffix in {".txt", ".md"}:
+        return _normalize_manual_feature_text(raw.decode("utf-8", errors="replace"))
+
+    if suffix == ".pdf":
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(raw))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        return _normalize_manual_feature_text(text)
+
+    if suffix == ".docx":
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            xml_bytes = zf.read("word/document.xml")
+        root = ElementTree.fromstring(xml_bytes)
+        text = "".join(node.text or "" for node in root.iter() if node.tag.endswith("}t"))
+        return _normalize_manual_feature_text(text)
+
+    raise HTTPException(400, "Unsupported file type. Use .txt, .md, .pdf, or .docx")
+
+
 @app.on_event("startup")
 async def startup():
     init_db()
+    db = SessionLocal()
+    try:
+        for row in db.query(Setting).all():
+            apply_setting_override(row.key, row.value)
+    finally:
+        db.close()
     if settings.enable_scheduler:
         global _scheduler_task
         _scheduler_task = asyncio.create_task(scheduler_loop())
@@ -80,7 +129,8 @@ def health():
         "version": "1.0.0",
         "backend_port": settings.backend_port,
         "projects_root": settings.projects_root,
-        "ai_enabled": bool(settings.anthropic_api_key),
+        "ai_enabled": any_ai_provider_configured(),
+        "ai_providers": provider_status(),
         "dry_run": settings.dry_run,
         "guardian": {
             "ready": bool(_guardian_report),
@@ -164,14 +214,14 @@ def scan(db: Session = Depends(get_db)):
             db.refresh(p)
             result.append(p)
 
-    return [ProductOut.model_validate(p) for p in result]
+    return [_product_to_out(db, p) for p in result]
 
 
 # ─── Products ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/products", response_model=List[ProductOut])
 def list_products(db: Session = Depends(get_db)):
-    return db.query(Product).all()
+    return [_product_to_out(db, p) for p in db.query(Product).all()]
 
 
 @app.get("/api/products/{product_id}", response_model=ProductOut)
@@ -179,7 +229,7 @@ def get_product(product_id: str, db: Session = Depends(get_db)):
     p = db.query(Product).filter(Product.id == product_id).first()
     if not p:
         raise HTTPException(404, "Product not found")
-    return p
+    return _product_to_out(db, p)
 
 
 @app.post("/api/products/{product_id}/analyze")
@@ -255,9 +305,9 @@ def propose_feature(product_id: str, db: Session = Depends(get_db)):
     )
 
     existing = [i.get("feature_title", "") for i in json.loads(p.feature_backlog or "[]")]
-    proposal, tokens = propose_feature_with_ai(
+    proposal, tokens, source, failure_reason = propose_feature_with_ai(
         p.name, p.path, p.detected_stack, readme, file_summary, existing,
-        manual_override=p.manual_feature if p.mode == "manual" else None,
+        manual_override=p.manual_feature if p.manual_feature else None,
     )
 
     p.proposed_feature = proposal.feature_title
@@ -265,7 +315,13 @@ def propose_feature(product_id: str, db: Session = Depends(get_db)):
     db.commit()
 
     # Also generate backlog proposals in background
-    return {"proposal": proposal.model_dump(), "tokens_used": tokens}
+    return {
+        "proposal": proposal.model_dump(),
+        "tokens_used": tokens,
+        "source": source,
+        "fallback_used": source == "fallback",
+        "failure_reason": failure_reason,
+    }
 
 
 @app.post("/api/products/{product_id}/propose-backlog")
@@ -326,10 +382,26 @@ def set_manual_feature(product_id: str, req: SetManualFeatureRequest, db: Sessio
     p = db.query(Product).filter(Product.id == product_id).first()
     if not p:
         raise HTTPException(404)
-    p.manual_feature = req.feature
-    p.mode = "manual"
+    p.manual_feature = _normalize_manual_feature_text(req.feature)
     db.commit()
     return {"manual_feature": p.manual_feature}
+
+
+@app.post("/api/products/{product_id}/manual-feature-file")
+async def set_manual_feature_file(product_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        raise HTTPException(404)
+    parsed = _extract_manual_feature_from_upload(file)
+    if not parsed:
+        raise HTTPException(400, "Could not extract any usable text from the uploaded file")
+    p.manual_feature = parsed
+    db.commit()
+    return {
+        "manual_feature": p.manual_feature,
+        "source_file": file.filename or "",
+        "chars": len(p.manual_feature),
+    }
 
 
 @app.post("/api/products/{product_id}/exclude-files")
@@ -553,6 +625,7 @@ def toggle_schedule(schedule_id: str, db: Session = Depends(get_db)):
 @app.get("/api/settings")
 def get_settings(db: Session = Depends(get_db)):
     rows = db.query(Setting).all()
+    secret_keys = {"gemini_api_key", "moonshot_api_key", "anthropic_api_key", "groq_api_key"}
     base = {
         "projects_root": settings.projects_root,
         "additional_roots": settings.additional_roots,
@@ -566,9 +639,23 @@ def get_settings(db: Session = Depends(get_db)):
         "allow_github_pr": settings.allow_github_pr,
         "dry_run": settings.dry_run,
         "ai_model": settings.ai_model,
-        "ai_enabled": bool(settings.anthropic_api_key),
+        "gemini_model": settings.gemini_model,
+        "kimi_model": settings.kimi_model,
+        "groq_model": settings.groq_model,
+        "ollama_model": settings.ollama_model,
+        "ollama_base_url": settings.ollama_base_url,
+        "ai_enabled": any_ai_provider_configured(),
+        "ai_providers": provider_status(),
+        "gemini_api_key": "",
+        "moonshot_api_key": "",
+        "groq_api_key": "",
+        "anthropic_api_key": "",
+        "gemini_api_key_set": provider_status()["gemini"],
+        "moonshot_api_key_set": provider_status()["kimi"],
+        "anthropic_api_key_set": provider_status()["anthropic"],
+        "groq_api_key_set": provider_status()["groq"],
     }
-    overrides = {r.key: r.value for r in rows}
+    overrides = {r.key: r.value for r in rows if r.key not in secret_keys}
     return {**base, **overrides}
 
 
@@ -581,7 +668,11 @@ def update_setting(req: SettingsUpdateRequest, db: Session = Depends(get_db)):
         s = Setting(key=req.key, value=req.value)
         db.add(s)
     db.commit()
-    return {"key": req.key, "value": req.value}
+    apply_setting_override(req.key, req.value)
+    value = req.value
+    if req.key in {"gemini_api_key", "moonshot_api_key", "anthropic_api_key", "groq_api_key"}:
+        value = "saved" if req.value else ""
+    return {"key": req.key, "value": value}
 
 
 # ─── WebSocket log streaming ──────────────────────────────────────────────────

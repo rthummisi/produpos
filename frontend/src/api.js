@@ -28,6 +28,19 @@ export const api = {
   bulkSetMode: (product_ids, mode) => req('POST', '/api/bulk/products/mode', { product_ids, mode }),
   setSelected: (id, selected) => req('POST', `/api/products/${id}/selected`, { selected }),
   setManualFeature: (id, feature) => req('POST', `/api/products/${id}/manual-feature`, { feature }),
+  uploadManualFeatureFile: async (id, file) => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch(`${BASE}/api/products/${id}/manual-feature-file`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(err || res.statusText)
+    }
+    return res.json()
+  },
   setExclusions: (id, patterns) => req('POST', `/api/products/${id}/exclude-files`, { patterns }),
   setSkipPersistent: (id, skip) => req('POST', `/api/products/${id}/skip-persistent`, { skip }),
   getBacklog: (id) => req('GET', `/api/products/${id}/backlog`),

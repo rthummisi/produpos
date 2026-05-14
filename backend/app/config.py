@@ -21,8 +21,16 @@ class Settings(BaseSettings):
     frontend_port: int = 5179
 
     # AI
+    gemini_api_key: str = ""
+    moonshot_api_key: str = ""
     anthropic_api_key: str = ""
+    groq_api_key: str = ""
     ai_model: str = "claude-sonnet-4-6"
+    gemini_model: str = "gemini-3-flash-preview"
+    kimi_model: str = "kimi-k2-0905-preview"
+    groq_model: str = "llama-3.3-70b-versatile"
+    ollama_model: str = "qwen2.5-coder:7b"
+    ollama_base_url: str = "http://localhost:11434"
     ai_max_tokens: int = 8192
     ai_timeout: int = 120
 
@@ -67,6 +75,54 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_anthropic_api_key() -> str:
+    return settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+
+
+def apply_setting_override(key: str, value: str):
+    """Apply selected persisted settings to the live process."""
+    env_key_map = {
+        "gemini_api_key": "GEMINI_API_KEY",
+        "moonshot_api_key": "MOONSHOT_API_KEY",
+        "anthropic_api_key": "ANTHROPIC_API_KEY",
+        "groq_api_key": "GROQ_API_KEY",
+    }
+    if key in env_key_map:
+        setattr(settings, key, value)
+        if value:
+            os.environ[env_key_map[key]] = value
+        else:
+            os.environ.pop(env_key_map[key], None)
+        return
+
+    cast_map = {
+        "projects_root": str,
+        "additional_roots": str,
+        "max_concurrent_agents": int,
+        "agent_timeout_seconds": int,
+        "require_approval_before_write": lambda v: str(v).lower() == "true",
+        "allow_git_commits": lambda v: str(v).lower() == "true",
+        "allow_git_branch_creation": lambda v: str(v).lower() == "true",
+        "allow_non_git_updates": lambda v: str(v).lower() == "true",
+        "allow_auto_create_git_repo": lambda v: str(v).lower() == "true",
+        "allow_github_pr": lambda v: str(v).lower() == "true",
+        "dry_run": lambda v: str(v).lower() == "true",
+        "ai_model": str,
+        "gemini_model": str,
+        "kimi_model": str,
+        "groq_model": str,
+        "ollama_model": str,
+        "ollama_base_url": str,
+    }
+    caster = cast_map.get(key)
+    if not caster or not hasattr(settings, key):
+        return
+    try:
+        setattr(settings, key, caster(value))
+    except Exception:
+        pass
 
 NEVER_TOUCH_PATTERNS = {
     ".env", ".env.local", ".env.production", ".env.development",

@@ -32,6 +32,27 @@ function SettingRow({ label, description, settingKey, value, type = 'text', onSa
     )
   }
 
+  if (type === 'status') {
+    const enabled = String(value) === 'true'
+    return (
+      <div className="flex items-center justify-between py-4 border-b border-gray-50 dark:border-gray-800">
+        <div>
+          <div className="text-sm font-medium text-gray-900 dark:text-white">{label}</div>
+          <div className="text-xs text-gray-400 mt-0.5">{description}</div>
+        </div>
+        <span className={`text-xs px-2 py-1 rounded-full ${
+          enabled
+            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400'
+            : 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
+        }`}>
+          {enabled ? 'Enabled' : 'Disabled'}
+        </span>
+      </div>
+    )
+  }
+
+  const inputType = type === 'password' ? 'password' : 'text'
+
   return (
     <div className="flex items-center justify-between gap-6 py-4 border-b border-gray-50 dark:border-gray-800">
       <div className="flex-1 min-w-0">
@@ -40,6 +61,7 @@ function SettingRow({ label, description, settingKey, value, type = 'text', onSa
       </div>
       <div className="flex items-center gap-2 shrink-0">
         <input
+          type={inputType}
           value={local}
           onChange={e => setLocal(e.target.value)}
           className="text-sm px-3 py-1.5 w-48 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:border-blue-400"
@@ -81,8 +103,17 @@ export default function SettingsPanel() {
     {
       section: 'AI',
       items: [
-        { key: 'ai_model', label: 'AI model', desc: 'Claude model to use for feature proposals and implementation', type: 'text' },
-        { key: 'ai_enabled', label: 'AI enabled', desc: 'Set ANTHROPIC_API_KEY in environment to enable', type: 'boolean' },
+        { key: 'gemini_api_key', label: 'Gemini API key', desc: settings.gemini_api_key_set ? 'Primary provider is configured. Saving a new value replaces it.' : 'Primary provider. Free-tier Gemini key from Google AI Studio.', type: 'password' },
+        { key: 'gemini_model', label: 'Gemini model', desc: 'Primary Gemini model for proposals and implementation', type: 'text' },
+        { key: 'moonshot_api_key', label: 'Kimi API key', desc: settings.moonshot_api_key_set ? 'Kimi fallback is configured. Saving a new value replaces it.' : 'Moonshot/Kimi hosted fallback before other paid providers.', type: 'password' },
+        { key: 'kimi_model', label: 'Kimi model', desc: 'Moonshot/Kimi fallback model', type: 'text' },
+        { key: 'anthropic_api_key', label: 'Anthropic API key', desc: settings.anthropic_api_key_set ? 'Fallback provider is configured. Saving a new value replaces it.' : 'Fallback provider when Gemini is unavailable or out of quota.', type: 'password' },
+        { key: 'ai_model', label: 'Anthropic model', desc: 'Anthropic fallback model', type: 'text' },
+        { key: 'groq_api_key', label: 'Groq API key', desc: settings.groq_api_key_set ? 'Fallback provider is configured. Saving a new value replaces it.' : 'Fallback provider after Anthropic.', type: 'password' },
+        { key: 'groq_model', label: 'Groq model', desc: 'Groq fallback model', type: 'text' },
+        { key: 'ollama_base_url', label: 'Ollama base URL', desc: 'Local fallback after Gemini and Kimi, before paid providers', type: 'text' },
+        { key: 'ollama_model', label: 'Ollama model', desc: 'Local Ollama model name. Faster default is qwen2.5-coder:7b', type: 'text' },
+        { key: 'ai_enabled', label: 'AI enabled', desc: 'Read-only status for the provider chain: Gemini -> Kimi -> Ollama -> Anthropic -> Groq', type: 'status' },
       ],
     },
     {

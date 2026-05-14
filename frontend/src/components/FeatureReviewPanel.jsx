@@ -2,6 +2,21 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api.js'
 
+function formatLastUpdated(value) {
+  if (!value) return 'Never'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Never'
+  return date.toLocaleString([], {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  })
+}
+
 function DiffViewer({ diffs }) {
   if (!diffs || diffs.length === 0)
     return <div className="text-xs text-gray-400 py-2">No diff preview yet — run a dry run first.</div>
@@ -73,9 +88,12 @@ function BacklogDrawer({ productId, onSelect, onClose }) {
 }
 
 function ProductCard({ product, onRefresh }) {
-  const [mode, setMode] = useState(product.mode)
+  const nav = useNavigate()
   const [manualFeature, setManualFeature] = useState(product.manual_feature || '')
   const [proposing, setProposing] = useState(false)
+  const [proposalStatus, setProposalStatus] = useState('')
+  const [savingManual, setSavingManual] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
   const [showDiff, setShowDiff] = useState(false)
   const [diffs, setDiffs] = useState([])
   const [showBacklog, setShowBacklog] = useState(false)
@@ -88,18 +106,47 @@ function ProductCard({ product, onRefresh }) {
   try { if (product.proposed_feature_json) proposal = JSON.parse(product.proposed_feature_json) }
   catch {}
 
-  const saveMode = async (m) => {
-    setMode(m)
-    await api.setMode(product.id, m)
+  const saveManual = async (value = manualFeature) => {
+    setSavingManual(true)
+    try {
+      const result = await api.setManualFeature(product.id, value)
+      setManualFeature(result.manual_feature || '')
+      setProposalStatus(result.manual_feature ? 'Manual update brief saved.' : 'Manual update brief cleared.')
+      onRefresh()
+    } finally {
+      setSavingManual(false)
+    }
   }
 
-  const saveManual = async () => {
-    await api.setManualFeature(product.id, manualFeature)
+  const handleManualFile = async (file) => {
+    if (!file) return
+    setSavingManual(true)
+    try {
+      const result = await api.uploadManualFeatureFile(product.id, file)
+      setManualFeature(result.manual_feature || '')
+      setProposalStatus(`Loaded manual update brief from ${result.source_file}.`)
+      onRefresh()
+    } finally {
+      setSavingManual(false)
+      setDragActive(false)
+    }
   }
 
   const propose = async () => {
     setProposing(true)
-    try { await api.proposeFeature(product.id); onRefresh() }
+    try {
+      const result = await api.proposeFeature(product.id)
+      if (result?.fallback_used) {
+        setProposalStatus('AI providers were unavailable. Showing fallback proposal.')
+      } else if (manualFeature.trim() && result?.source) {
+        setProposalStatus(`Generated via ${result.source} using your manual update brief.`)
+      } else if (result?.source) {
+        setProposalStatus(`Generated via ${result.source}.`)
+      } else {
+        setProposalStatus('Proposal refreshed.')
+      }
+      onRefresh()
+    }
     finally { setProposing(false) }
   }
 
@@ -121,14 +168,13 @@ function ProductCard({ product, onRefresh }) {
 
   const runSingle = async () => {
     setRunning(true)
-    try { await api.runSingle(product.id) }
+    try {
+      await api.runSingle(product.id)
+      onRefresh()
+      setTimeout(() => nav('/console'), 600)
+    }
     finally { setRunning(false) }
   }
-
-  const modeLabel = mode === 'manual' ? '✏️ Manual' : '⚡ Auto'
-  const modeColor = mode === 'manual'
-    ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400'
-    : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
 
   return (
     <div className={`bg-white dark:bg-gray-900 rounded-2xl border transition-all ${
@@ -167,99 +213,114 @@ function ProductCard({ product, onRefresh }) {
               {Math.round(product.health_score * 100)}% health
             </span>
           )}
-          <span className={`text-xs px-2 py-0.5 rounded-md font-medium ${modeColor}`}>{modeLabel}</span>
+          <span className="text-xs text-gray-400">Updated {formatLastUpdated(product.last_update_at)}</span>
           <span className="text-xs text-gray-400">{product.git_status}</span>
         </div>
       </div>
 
       <div className="px-5 py-4 space-y-4">
-        {/* Mode toggle */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-400 w-10">Mode</span>
-          <div className="flex rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden text-xs">
-            {['auto', 'manual'].map(m => (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Manual Update Brief</span>
+            <div className="flex items-center gap-3">
+              <label className="text-xs text-blue-600 dark:text-blue-400 hover:underline cursor-pointer">
+                Attach file
+                <input
+                  type="file"
+                  accept=".txt,.md,.pdf,.docx"
+                  className="hidden"
+                  onChange={e => handleManualFile(e.target.files?.[0])}
+                />
+              </label>
               <button
-                key={m}
-                onClick={() => saveMode(m)}
-                className={`px-3 py-1.5 capitalize transition-colors ${
-                  mode === m
-                    ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
-                    : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
-                }`}
+                onClick={() => saveManual('')}
+                disabled={savingManual || !manualFeature}
+                className="text-xs text-gray-400 hover:underline disabled:opacity-50"
               >
-                {m === 'auto' ? '⚡ Auto' : '✏️ Manual'}
+                Clear
               </button>
-            ))}
+            </div>
+          </div>
+          <div
+            onDragOver={e => { e.preventDefault(); setDragActive(true) }}
+            onDragLeave={() => setDragActive(false)}
+            onDrop={e => {
+              e.preventDefault()
+              handleManualFile(e.dataTransfer.files?.[0])
+            }}
+            className={`rounded-xl border transition-colors ${
+              dragActive
+                ? 'border-blue-400 bg-blue-50/50 dark:bg-blue-900/10'
+                : 'border-gray-200 dark:border-gray-700'
+            }`}
+          >
+            <textarea
+              value={manualFeature}
+              onChange={e => setManualFeature(e.target.value)}
+              placeholder='Type a specific feature/update request here, or drop a .md, .txt, .pdf, or .docx file.'
+              className="w-full min-h-28 text-sm px-3 py-3 rounded-xl bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none"
+            />
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <div className="text-xs text-gray-400">
+              Saved brief is always used first when proposing or running updates for this product.
+            </div>
+            <button
+              onClick={() => saveManual()}
+              disabled={savingManual}
+              className="px-3 py-2 text-xs bg-gray-900 text-white dark:bg-white dark:text-gray-900 rounded-xl hover:opacity-90 disabled:opacity-50"
+            >
+              {savingManual ? 'Saving...' : 'Save brief'}
+            </button>
           </div>
         </div>
 
-        {/* Auto: proposal */}
-        {mode === 'auto' && (
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Proposed Feature</span>
-              <div className="flex gap-3">
-                <button onClick={propose} disabled={proposing}
-                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50">
-                  {proposing ? 'Proposing...' : 'Re-propose'}
-                </button>
-                <button onClick={() => setShowBacklog(true)} className="text-xs text-gray-400 hover:underline">
-                  Backlog
-                </button>
-                <button onClick={generateBacklog} disabled={generatingBacklog}
-                  className="text-xs text-gray-400 hover:underline disabled:opacity-50">
-                  {generatingBacklog ? 'Generating...' : 'Gen backlog'}
-                </button>
-              </div>
-            </div>
-            {proposal ? (
-              <div className="rounded-xl bg-gray-50 dark:bg-gray-800 p-4 space-y-2">
-                <div className="font-medium text-sm text-gray-900 dark:text-white">{proposal.feature_title}</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">{proposal.customer_problem}</div>
-                <div className="flex flex-wrap gap-1.5 pt-0.5">
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${
-                    proposal.risk_level === 'low' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400' :
-                    proposal.risk_level === 'medium' ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'
-                  }`}>{proposal.risk_level} risk</span>
-                  <span className="text-xs text-gray-400">{proposal.estimated_scope}</span>
-                  {proposal.files_likely_to_change?.length > 0 && (
-                    <span className="text-xs text-gray-400">· {proposal.files_likely_to_change.join(', ')}</span>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-xl bg-gray-50 dark:bg-gray-800 p-4 text-xs text-gray-400">
-                No proposal yet. Click "Re-propose" to generate.
-              </div>
-            )}
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-400 w-24">Last update</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400">{formatLastUpdated(product.last_update_at)}</span>
+        </div>
 
-        {/* Manual: text input */}
-        {mode === 'manual' && (
-          <div>
-            <span className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 block">
-              Feature to implement
-            </span>
-            <div className="flex gap-2">
-              <input
-                value={manualFeature}
-                onChange={e => setManualFeature(e.target.value)}
-                placeholder="Describe exactly what to add or change..."
-                className="flex-1 text-sm px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-blue-400"
-              />
-              <button onClick={saveManual}
-                className="px-3 py-2 text-xs bg-gray-900 text-white dark:bg-white dark:text-gray-900 rounded-xl hover:opacity-90">
-                Save
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Proposed Feature</span>
+            <div className="flex gap-3">
+              <button onClick={propose} disabled={proposing}
+                className="text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50">
+                {proposing ? 'Proposing...' : 'Re-propose'}
+              </button>
+              <button onClick={() => setShowBacklog(true)} className="text-xs text-gray-400 hover:underline">
+                Backlog
+              </button>
+              <button onClick={generateBacklog} disabled={generatingBacklog}
+                className="text-xs text-gray-400 hover:underline disabled:opacity-50">
+                {generatingBacklog ? 'Generating...' : 'Gen backlog'}
               </button>
             </div>
-            {manualFeature && (
-              <div className="mt-2 text-xs text-gray-400">
-                Saved: "{manualFeature.slice(0, 80)}{manualFeature.length > 80 ? '…' : ''}"
-              </div>
-            )}
           </div>
-        )}
+          {proposalStatus && (
+            <div className="mb-2 text-xs text-gray-400">{proposalStatus}</div>
+          )}
+          {proposal ? (
+            <div className="rounded-xl bg-gray-50 dark:bg-gray-800 p-4 space-y-2">
+              <div className="font-medium text-sm text-gray-900 dark:text-white">{proposal.feature_title}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">{proposal.customer_problem}</div>
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                <span className={`text-xs px-1.5 py-0.5 rounded ${
+                  proposal.risk_level === 'low' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400' :
+                  proposal.risk_level === 'medium' ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'
+                }`}>{proposal.risk_level} risk</span>
+                <span className="text-xs text-gray-400">{proposal.estimated_scope}</span>
+                {proposal.files_likely_to_change?.length > 0 && (
+                  <span className="text-xs text-gray-400">· {proposal.files_likely_to_change.join(', ')}</span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl bg-gray-50 dark:bg-gray-800 p-4 text-xs text-gray-400">
+              No proposal yet. Click "Re-propose" to generate.
+            </div>
+          )}
+        </div>
 
         {/* Diff preview & per-product exclusions row */}
         <div className="flex items-center gap-4 flex-wrap">
@@ -320,13 +381,6 @@ export default function FeatureReviewPanel() {
 
   const updatable = products.filter(p => p.updatable && !p.skip_persistent)
   const selected = updatable.filter(p => p.selected !== false)
-  const autoSelected = selected.filter(p => p.mode !== 'manual')
-  const manualSelected = selected.filter(p => p.mode === 'manual')
-
-  const setAllMode = async (mode) => {
-    await api.bulkSetMode(null, mode)
-    refresh()
-  }
 
   const selectAll = async (val) => {
     await Promise.all(updatable.map(p => api.setSelected(p.id, val)))
@@ -354,7 +408,7 @@ export default function FeatureReviewPanel() {
       <div className="mb-5">
         <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Feature Review</h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-          Approve features, set modes, and run updates
+          Approve features, review last update times, and run updates
         </p>
       </div>
 
@@ -362,23 +416,6 @@ export default function FeatureReviewPanel() {
       {updatable.length > 0 && (
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 px-5 py-4 mb-5">
           <div className="flex items-center gap-3 flex-wrap">
-            {/* Bulk mode */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-gray-400 mr-1">Set all:</span>
-              <button
-                onClick={() => setAllMode('auto')}
-                className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-              >
-                ⚡ All auto
-              </button>
-              <button
-                onClick={() => setAllMode('manual')}
-                className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-              >
-                ✏️ All manual
-              </button>
-            </div>
-
             {/* Select all / none */}
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-gray-400 mr-1">Select:</span>
@@ -404,8 +441,6 @@ export default function FeatureReviewPanel() {
             <div className="flex items-center gap-3">
               <div className="text-xs text-gray-500 dark:text-gray-400 text-right">
                 {selected.length} of {updatable.length} selected
-                {autoSelected.length > 0 && <span className="ml-2">· ⚡ {autoSelected.length} auto</span>}
-                {manualSelected.length > 0 && <span className="ml-2">· ✏️ {manualSelected.length} manual</span>}
               </div>
               <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
                 <input

@@ -139,6 +139,18 @@ def _push(path: str, branch: str):
     return ok, msg
 
 
+def _commit_dirty_repo(path: str) -> Tuple[bool, str]:
+    ok, status = _git(["status", "--porcelain"], path)
+    if not ok or not status.strip():
+        return True, ""
+    _git(["add", "-A"], path)
+    ok, msg = _git(["commit", "-m", "chore(guardian): auto-clean dirty repo on startup"], path)
+    if not ok:
+        return False, msg
+    ok_sha, sha = _git(["rev-parse", "--short", "HEAD"], path)
+    return ok_sha, sha if ok_sha else ""
+
+
 # ─── CHANGELOG helper ────────────────────────────────────────────────────────
 
 def _ensure_changelog(path: str, product_name: str, version: str) -> bool:
@@ -171,10 +183,20 @@ def sanitize_product(path: str, name: str) -> Dict:
         "changelog_created": False,
         "committed": False,
         "pushed": False,
+        "dirty_repo_cleaned": False,
         "message": "",
     }
 
     is_git = (Path(path) / ".git").exists()
+    if is_git:
+        cleaned, dirty_msg = _commit_dirty_repo(path)
+        if dirty_msg:
+            result["dirty_repo_cleaned"] = cleaned
+            if cleaned:
+                result["message"] = f"Dirty repo auto-cleaned in commit {dirty_msg}"
+            else:
+                result["message"] = f"Dirty repo cleanup failed: {dirty_msg}"
+
     file_ver, ver_source = _read_version_file(path)
     tag = _get_latest_tag(path) if is_git else None
     tag_ver = tag.lstrip("v") if tag else ""
@@ -288,6 +310,7 @@ def sanitize_product(path: str, name: str) -> Dict:
 def _upsert_products(db: Session, scanned: List[Dict]):
     from .version_manager import get_current_version as _gv
     from .safety import get_git_status
+    now = datetime.utcnow()
     added = []
     for rp in scanned:
         pid = str(uuid.uuid5(uuid.NAMESPACE_URL, rp["path"]))
@@ -305,6 +328,7 @@ def _upsert_products(db: Session, scanned: List[Dict]):
                 git_status=git_str,
                 code_confidence_score=rp.get("code_confidence_score", 0.0),
                 current_version=live_ver,
+                updated_at=now,
             )
             db.add(p)
             added.append(rp["product_name"])
@@ -315,6 +339,7 @@ def _upsert_products(db: Session, scanned: List[Dict]):
             existing.git_status = git_str
             existing.code_confidence_score = rp.get("code_confidence_score", 0.0)
             existing.current_version = live_ver
+            existing.updated_at = now
     db.commit()
     return added
 

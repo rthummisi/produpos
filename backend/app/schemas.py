@@ -71,6 +71,7 @@ class ProductOut(BaseModel):
     dependency_report: Optional[str] = None
     feature_backlog: Optional[str] = None
     code_confidence_score: float
+    last_update_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

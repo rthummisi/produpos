@@ -34,7 +34,7 @@ export default function RunConsole() {
     }).catch(() => {})
 
     const newWs = createWebSocket(runId, (msg) => {
-      setLogs(prev => [...prev, msg])
+      setLogs(prev => prev.includes(msg) ? prev : [...prev, msg])
     })
     setWs(newWs)
   }

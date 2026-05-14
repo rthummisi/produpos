@@ -2,6 +2,20 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api.js'
 
+function formatLastUpdated(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString([], {
+    timeZone: 'America/Los_Angeles',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  })
+}
+
 function Stat({ label, value, sub, color = 'gray' }) {
   const colors = {
     gray: 'text-gray-900 dark:text-white',
@@ -144,8 +158,6 @@ export default function Dashboard() {
 
   const updatable = products.filter(p => p.updatable && !p.skip_persistent)
   const skipped = products.filter(p => !p.updatable || p.skip_persistent)
-  const autoCount = updatable.filter(p => p.mode !== 'manual').length
-  const manualCount = updatable.filter(p => p.mode === 'manual').length
   const lastRun = runs[0]
 
   return (
@@ -185,8 +197,7 @@ export default function Dashboard() {
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <Stat label="Total Products" value={products.length} />
-        <Stat label="Updatable" value={updatable.length} color="green"
-          sub={updatable.length > 0 ? `${autoCount} auto · ${manualCount} manual` : undefined} />
+        <Stat label="Updatable" value={updatable.length} color="green" />
         <Stat label="Skipped" value={skipped.length} color="amber" />
         <Stat
           label="Last Run"
@@ -205,9 +216,7 @@ export default function Dashboard() {
                 Update All Products
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400">
-                {autoCount > 0 && <span className="mr-3">⚡ {autoCount} auto</span>}
-                {manualCount > 0 && <span className="mr-3">✏️ {manualCount} manual</span>}
-                <span className="text-gray-400">· Each product runs in its own mode</span>
+                <span className="text-gray-400">Each product uses its saved proposal and shows its last successful update time</span>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -252,7 +261,7 @@ export default function Dashboard() {
             <span className="col-span-4 text-xs font-medium text-gray-400 uppercase tracking-wider">Product</span>
             <span className="col-span-3 text-xs font-medium text-gray-400 uppercase tracking-wider">Stack</span>
             <span className="col-span-2 text-xs font-medium text-gray-400 uppercase tracking-wider">Version</span>
-            <span className="col-span-1 text-xs font-medium text-gray-400 uppercase tracking-wider">Mode</span>
+            <span className="col-span-1 text-xs font-medium text-gray-400 uppercase tracking-wider">Last Updated</span>
             <span className="col-span-2 text-xs font-medium text-gray-400 uppercase tracking-wider">Status</span>
           </div>
           <div className="divide-y divide-gray-50 dark:divide-gray-800">
@@ -263,11 +272,7 @@ export default function Dashboard() {
                 <span className="col-span-2 text-xs font-mono font-medium text-gray-700 dark:text-gray-300">
                   {p.current_version ? `v${p.current_version}` : <span className="text-gray-300 dark:text-gray-600">—</span>}
                 </span>
-                <span className="col-span-1">
-                  {p.updatable && !p.skip_persistent && (
-                    <span className="text-xs">{p.mode === 'manual' ? '✏️' : '⚡'}</span>
-                  )}
-                </span>
+                <span className="col-span-1 text-xs text-gray-400">{formatLastUpdated(p.last_update_at)}</span>
                 <span className="col-span-2">
                   <span className={`text-xs px-2 py-0.5 rounded-full ${
                     p.updatable && !p.skip_persistent

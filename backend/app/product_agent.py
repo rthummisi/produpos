@@ -13,7 +13,7 @@ from .feature_planner import propose_feature_with_ai
 from .implementation_runner import generate_implementation_with_ai, apply_implementation, verify_implementation
 from .git_manager import (
     create_branch, checkout_branch, stage_files, commit_changes,
-    push_branch, create_github_pr, stash_dirty, pop_stash,
+    push_branch, create_github_pr, stash_dirty, pop_stash, commit_all_changes, cherry_pick_commit,
     get_current_branch, has_remote,
 )
 from .version_manager import get_current_version, bump_version
@@ -123,27 +123,32 @@ class ProductAgent:
         is_git = git_info.get("is_git", False)
         original_branch = git_info.get("branch", "main") if is_git else ""
         stash_ref = ""
+        preexisting_commit_sha = ""
 
         # Stash any pre-existing dirty changes so we branch from clean HEAD
         if is_git and git_info.get("dirty"):
-            self.log(f"Repo is dirty ({len(git_info.get('modified', []))} files) — stashing before update...")
-            stash_ref = stash_dirty(self.path)
-            if stash_ref:
-                self.log("Pre-existing changes stashed — will restore after update")
-                git_info = get_git_status(self.path)  # recheck after stash
+            dirty_count = len(git_info.get("modified", [])) + len(git_info.get("untracked", []))
+            self.log(f"Repo is dirty ({dirty_count} files) — auto-saving local changes before update...")
+            preexisting_commit_sha = commit_all_changes(
+                self.path,
+                "chore(guardian): auto-save pre-existing local changes before ProdupOS update",
+            )
+            if preexisting_commit_sha:
+                self.log(f"Pre-existing changes committed to {original_branch}: {preexisting_commit_sha}")
+                git_info = get_git_status(self.path)
             else:
-                self.log("Nothing stashed (stash may have been empty)")
+                self.log("No dirty changes could be committed; proceeding with existing state")
 
         version_before = get_current_version(self.path)
         self.run_item.version_before = version_before
 
         # Load / generate proposal
         mode = self.product.mode
-        if mode == "manual" and self.product.manual_feature:
+        if self.product.manual_feature:
             self.log("Using manual feature specification...")
             readme = self._get_readme()
             file_summary = self._get_file_summary()
-            proposal, tokens = propose_feature_with_ai(
+            proposal, tokens, source, failure_reason = propose_feature_with_ai(
                 self.product.name, self.path, self.product.detected_stack,
                 readme, file_summary,
                 self._get_existing_features(),
@@ -157,7 +162,7 @@ class ProductAgent:
             except Exception:
                 readme = self._get_readme()
                 file_summary = self._get_file_summary()
-                proposal, tokens = propose_feature_with_ai(
+                proposal, tokens, source, failure_reason = propose_feature_with_ai(
                     self.product.name, self.path, self.product.detected_stack,
                     readme, file_summary,
                     self._get_existing_features(),
@@ -170,7 +175,7 @@ class ProductAgent:
         # Generate implementation
         self.log("Generating implementation...")
         loop = asyncio.get_event_loop()
-        file_changes, explanation, tokens = await loop.run_in_executor(
+        file_changes, explanation, tokens, implementation_source = await loop.run_in_executor(
             None,
             generate_implementation_with_ai,
             self.product.name, self.path, self.product.detected_stack, proposal
@@ -182,10 +187,24 @@ class ProductAgent:
         self.run_item.file_changes = json.dumps([fc.model_dump() for fc in file_changes])
         self.db.commit()
 
-        if self.dry_run:
-            self.log("Dry run — skipping writes")
+        if implementation_source == "placeholder":
+            if explanation:
+                self.log(f"AI implementation unavailable: {explanation[:500]}")
+            self.log("AI implementation unavailable — skipping write/version bump to avoid placeholder-only updates")
+            self.run_item.status = "skipped"
+            self.run_item.reason = explanation or "AI implementation unavailable; no code changes were applied"
+            self.run_item.completed_at = datetime.utcnow()
+            self._update_cost(self.total_tokens)
+            self.db.commit()
             if stash_ref:
                 self._restore_stash(original_branch, stash_ref)
+            return
+
+        if implementation_source == "scaffold":
+            self.log("Using deterministic fallback scaffold implementation")
+
+        if self.dry_run:
+            self.log("Dry run — skipping writes")
             self.run_item.status = "dry_run_complete"
             self.run_item.completed_at = datetime.utcnow()
             self._update_cost(self.total_tokens)
@@ -218,7 +237,6 @@ class ProductAgent:
             self.run_item.status = "failed"
             self.run_item.reason = str(e)
             self._restore_if_snapshot()
-            self._restore_stash(original_branch, stash_ref)
             self.run_item.completed_at = datetime.utcnow()
             self.db.commit()
             return
@@ -232,9 +250,9 @@ class ProductAgent:
         if not verification["ok"]:
             self.log("Verification failed — restoring snapshot")
             self.run_item.status = "failed"
-            self.run_item.reason = "Verification failed"
+            failed_checks = [c for c in verification.get("checks", []) if not c.get("ok")]
+            self.run_item.reason = failed_checks[0].get("error", "Verification failed") if failed_checks else "Verification failed"
             self._restore_if_snapshot()
-            self._restore_stash(original_branch, stash_ref)
             self.run_item.completed_at = datetime.utcnow()
             self.db.commit()
             return
@@ -302,13 +320,21 @@ class ProductAgent:
                 if pr_url:
                     self.log(f"PR: {pr_url}")
 
-            # Return to original branch, pop user's stash
+            # Return to original branch and apply the verified commit there
             if branch and original_branch:
                 checkout_branch(self.path, original_branch)
                 self.log(f"Returned to {original_branch}")
-
-        # Restore user's pre-existing dirty files
-        self._restore_stash(original_branch, stash_ref)
+                if commit_sha:
+                    picked, pick_msg = cherry_pick_commit(self.path, commit_sha)
+                    if picked:
+                        self.log(f"Applied verified feature commit onto {original_branch}: {commit_sha}")
+                    else:
+                        self.log(f"Failed to apply verified feature commit onto {original_branch}: {pick_msg}")
+                        self.run_item.status = "failed"
+                        self.run_item.reason = f"Cherry-pick failed: {pick_msg}"
+                        self.run_item.completed_at = datetime.utcnow()
+                        self.db.commit()
+                        return
 
         # Update product version in DB
         self.product.current_version = new_ver
@@ -323,6 +349,7 @@ class ProductAgent:
         self._update_cost(self.total_tokens)
         self.db.commit()
 
+        self.log(f"Feature built, verified, committed, and applied cleanly to {original_branch or 'current branch'}")
         self.log(f"Done ✓  v{old_ver or '?'} → v{new_ver} · {proposal.feature_title}")
 
     def _restore_stash(self, original_branch: str, stash_ref: str):

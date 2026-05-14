@@ -1,7 +1,7 @@
 import json
-import os
 from typing import Dict, List, Optional
 from .config import settings
+from .ai_clients import call_tool_with_fallback
 from .schemas import FeatureProposal
 
 FALLBACK_FEATURES: Dict[str, List[Dict]] = {
@@ -114,15 +114,8 @@ def propose_feature_with_ai(
     file_summary: str,
     existing_features: List[str],
     manual_override: Optional[str] = None,
-) -> tuple[FeatureProposal, int]:
-    api_key = settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return get_fallback_feature(detected_stack, existing_features), 0
-
+) -> tuple[FeatureProposal, int, str, Optional[str]]:
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-
         system = (
             "You are ProdupOS, an AI product engineer. "
             "Analyze the given product and propose exactly one high-impact feature. "
@@ -148,46 +141,35 @@ Already implemented features (do NOT repeat):
 
 Propose one feature using the tool."""
 
-        tools = [{
-            "name": "submit_feature_proposal",
-            "description": "Submit the single best feature proposal for this product",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "feature_title": {"type": "string"},
-                    "customer_problem": {"type": "string"},
-                    "why_this_matters": {"type": "string"},
-                    "files_likely_to_change": {"type": "array", "items": {"type": "string"}},
-                    "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
-                    "estimated_scope": {"type": "string"},
-                    "demo_instructions": {"type": "string"},
-                },
-                "required": ["feature_title", "customer_problem", "why_this_matters",
-                             "files_likely_to_change", "risk_level", "estimated_scope",
-                             "demo_instructions"],
+        schema = {
+            "type": "object",
+            "properties": {
+                "feature_title": {"type": "string"},
+                "customer_problem": {"type": "string"},
+                "why_this_matters": {"type": "string"},
+                "files_likely_to_change": {"type": "array", "items": {"type": "string"}},
+                "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+                "estimated_scope": {"type": "string"},
+                "demo_instructions": {"type": "string"},
             },
-        }]
+            "required": ["feature_title", "customer_problem", "why_this_matters",
+                         "files_likely_to_change", "risk_level", "estimated_scope",
+                         "demo_instructions"],
+        }
 
-        response = client.messages.create(
-            model=settings.ai_model,
-            max_tokens=2048,
+        result = call_tool_with_fallback(
             system=system,
-            messages=[{"role": "user", "content": user_msg}],
-            tools=tools,
-            tool_choice={"type": "any"},
+            user_message=user_msg,
+            tool_name="submit_feature_proposal",
+            tool_description="Submit the single best feature proposal for this product",
+            input_schema=schema,
+            max_tokens=2048,
             timeout=settings.ai_timeout,
         )
-
-        tokens = response.usage.input_tokens + response.usage.output_tokens
-
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "submit_feature_proposal":
-                return FeatureProposal(**block.input), tokens
+        return FeatureProposal(**result.tool_input), result.tokens, result.provider, None
 
     except Exception as e:
-        pass
-
-    return get_fallback_feature(detected_stack, existing_features), 0
+        return get_fallback_feature(detected_stack, existing_features), 0, "fallback", str(e)
 
 
 def generate_multiple_proposals(
@@ -198,21 +180,7 @@ def generate_multiple_proposals(
     file_summary: str,
 ) -> tuple[List[FeatureProposal], int]:
     """Generate backlog of 3-5 feature proposals for this product."""
-    api_key = settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        stacks = ["default", "react", "fastapi"]
-        proposals = []
-        seen = []
-        for s in stacks:
-            p = get_fallback_feature(s if s in detected_stack.lower() else detected_stack, seen)
-            seen.append(p.feature_title)
-            proposals.append(p)
-        return proposals, 0
-
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-
         user_msg = f"""Product: {product_name} | Stack: {detected_stack}
 
 README: {readme_content[:1500]}
@@ -220,53 +188,52 @@ Files: {file_summary[:2000]}
 
 Generate exactly 4 distinct feature proposals for the backlog. Use the tool."""
 
-        tools = [{
-            "name": "submit_backlog",
-            "description": "Submit 4 feature proposals for the backlog",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "proposals": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "feature_title": {"type": "string"},
-                                "customer_problem": {"type": "string"},
-                                "why_this_matters": {"type": "string"},
-                                "files_likely_to_change": {"type": "array", "items": {"type": "string"}},
-                                "risk_level": {"type": "string"},
-                                "estimated_scope": {"type": "string"},
-                                "demo_instructions": {"type": "string"},
-                            },
-                            "required": ["feature_title", "customer_problem", "why_this_matters",
-                                         "files_likely_to_change", "risk_level", "estimated_scope",
-                                         "demo_instructions"],
+        schema = {
+            "type": "object",
+            "properties": {
+                "proposals": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "feature_title": {"type": "string"},
+                            "customer_problem": {"type": "string"},
+                            "why_this_matters": {"type": "string"},
+                            "files_likely_to_change": {"type": "array", "items": {"type": "string"}},
+                            "risk_level": {"type": "string"},
+                            "estimated_scope": {"type": "string"},
+                            "demo_instructions": {"type": "string"},
                         },
-                        "minItems": 3,
-                        "maxItems": 5,
-                    }
-                },
-                "required": ["proposals"],
+                        "required": ["feature_title", "customer_problem", "why_this_matters",
+                                     "files_likely_to_change", "risk_level", "estimated_scope",
+                                     "demo_instructions"],
+                    },
+                    "minItems": 3,
+                    "maxItems": 5,
+                }
             },
-        }]
+            "required": ["proposals"],
+        }
 
-        response = client.messages.create(
-            model=settings.ai_model,
+        result = call_tool_with_fallback(
+            system=None,
+            user_message=user_msg,
+            tool_name="submit_backlog",
+            tool_description="Submit 4 feature proposals for the backlog",
+            input_schema=schema,
             max_tokens=4096,
-            messages=[{"role": "user", "content": user_msg}],
-            tools=tools,
-            tool_choice={"type": "any"},
             timeout=settings.ai_timeout,
         )
-
-        tokens = response.usage.input_tokens + response.usage.output_tokens
-
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "submit_backlog":
-                return [FeatureProposal(**p) for p in block.input["proposals"]], tokens
+        return [FeatureProposal(**p) for p in result.tool_input["proposals"]], result.tokens
 
     except Exception:
         pass
 
-    return [], 0
+    stacks = ["default", "react", "fastapi"]
+    proposals = []
+    seen = []
+    for s in stacks:
+        p = get_fallback_feature(s if s in detected_stack.lower() else detected_stack, seen)
+        seen.append(p.feature_title)
+        proposals.append(p)
+    return proposals, 0
