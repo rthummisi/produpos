@@ -72,6 +72,8 @@ class ProductOut(BaseModel):
     feature_backlog: Optional[str] = None
     code_confidence_score: float
     last_update_at: Optional[datetime] = None
+    last_built_feature_title: Optional[str] = None
+    last_built_feature_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

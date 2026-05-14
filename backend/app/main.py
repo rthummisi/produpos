@@ -47,13 +47,15 @@ _guardian_report: dict = {}
 
 
 def _product_to_out(db: Session, product: Product) -> ProductOut:
-    latest_update = db.query(RunItem.completed_at).filter(
+    latest_update = db.query(RunItem.feature_title, RunItem.completed_at).filter(
         RunItem.product_id == product.id,
         RunItem.status == "updated",
         RunItem.completed_at.isnot(None),
     ).order_by(RunItem.completed_at.desc()).first()
     payload = ProductOut.model_validate(product).model_dump()
-    payload["last_update_at"] = latest_update[0] if latest_update else product.updated_at
+    payload["last_update_at"] = latest_update[1] if latest_update else product.updated_at
+    payload["last_built_feature_title"] = latest_update[0] if latest_update else None
+    payload["last_built_feature_at"] = latest_update[1] if latest_update else None
     return ProductOut(**payload)
 
 

@@ -17,6 +17,11 @@ function formatLastUpdated(value) {
   })
 }
 
+function formatFeatureBuilt(value, title) {
+  if (!title || !value) return 'No successful feature build yet'
+  return `${title} · ${formatLastUpdated(value)}`
+}
+
 function DiffViewer({ diffs }) {
   if (!diffs || diffs.length === 0)
     return <div className="text-xs text-gray-400 py-2">No diff preview yet — run a dry run first.</div>
@@ -278,6 +283,11 @@ function ProductCard({ product, onRefresh }) {
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-400 w-24">Last update</span>
           <span className="text-xs text-gray-500 dark:text-gray-400">{formatLastUpdated(product.last_update_at)}</span>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <span className="text-xs text-gray-400 w-24 pt-0.5">Last built</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400">{formatFeatureBuilt(product.last_built_feature_at, product.last_built_feature_title)}</span>
         </div>
 
         <div>
