@@ -4,7 +4,8 @@ import { api } from '../api.js'
 
 function formatLastUpdated(value) {
   if (!value) return '—'
-  const date = new Date(value)
+  const normalized = /z$/i.test(value) ? value : `${value}Z`
+  const date = new Date(normalized)
   if (Number.isNaN(date.getTime())) return '—'
   return date.toLocaleString([], {
     timeZone: 'America/Los_Angeles',
