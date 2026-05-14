@@ -285,15 +285,24 @@ function ProductCard({ product, onRefresh }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-400 w-24">Last update</span>
-          <span className="text-xs text-gray-500 dark:text-gray-400">{formatLastUpdated(product.last_update_at)}</span>
-        </div>
+        {builtFeatureIsCurrentProposal ? (
+          <div className="flex items-start gap-2">
+            <span className="text-xs text-gray-400 w-24 pt-0.5">Last built</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">{formatFeatureBuilt(product.last_built_feature_at, product.last_built_feature_title)}</span>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400 w-24">Last update</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">{formatLastUpdated(product.last_update_at)}</span>
+            </div>
 
-        <div className="flex items-start gap-2">
-          <span className="text-xs text-gray-400 w-24 pt-0.5">Last built</span>
-          <span className="text-xs text-gray-500 dark:text-gray-400">{formatFeatureBuilt(product.last_built_feature_at, product.last_built_feature_title)}</span>
-        </div>
+            <div className="flex items-start gap-2">
+              <span className="text-xs text-gray-400 w-24 pt-0.5">Last built</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">{formatFeatureBuilt(product.last_built_feature_at, product.last_built_feature_title)}</span>
+            </div>
+          </>
+        )}
 
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -318,15 +327,8 @@ function ProductCard({ product, onRefresh }) {
             <div className="mb-2 text-xs text-gray-400">{proposalStatus}</div>
           )}
           {builtFeatureIsCurrentProposal ? (
-            <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20 p-4 space-y-2">
-              <div className="text-xs font-medium uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-                Last built successfully
-              </div>
-              <div className="font-medium text-sm text-gray-900 dark:text-white">{product.last_built_feature_title}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">{formatLastUpdated(product.last_built_feature_at)}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">
-                This feature is already built. Use `Propose next` to generate the next update idea.
-              </div>
+            <div className="rounded-xl bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20 p-4 text-xs text-gray-600 dark:text-gray-300">
+              This feature is already built. Use `Propose next` to generate the next update idea.
             </div>
           ) : proposal ? (
             <div className="rounded-xl bg-gray-50 dark:bg-gray-800 p-4 space-y-2">
