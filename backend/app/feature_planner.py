@@ -114,7 +114,30 @@ def propose_feature_with_ai(
     file_summary: str,
     existing_features: List[str],
     manual_override: Optional[str] = None,
+    db=None,
+    product_id: Optional[str] = None,
 ) -> tuple[FeatureProposal, int, str, Optional[str]]:
+    # ── RAG: retrieve relevant code chunks when available ─────────────────────
+    # If a db session and product_id are supplied, fetch the top-K most
+    # relevant code chunks instead of including the raw file_summary blob.
+    # Falls back to file_summary when RAG has no data (e.g. index not yet built).
+    rag_context = ""
+    if db is not None and product_id:
+        try:
+            from .services.rag_service import retrieve_relevant_code
+            query = manual_override or f"new feature for {detected_stack} product: {product_name}"
+            chunks = retrieve_relevant_code(db, product_id, query, limit=10)
+            if chunks:
+                rag_context = "\n\n---\n\n".join(chunks)
+        except Exception:
+            pass  # RAG unavailable — fall through to file_summary
+
+    code_section = (
+        f"Relevant code context (RAG):\n{rag_context[:6000]}"
+        if rag_context
+        else f"File structure:\n{file_summary[:3000]}"
+    )
+
     try:
         system = (
             "You are ProdupOS, an AI product engineer. "
@@ -131,8 +154,7 @@ Path: {product_path}
 README (first 2000 chars):
 {readme_content[:2000]}
 
-File structure:
-{file_summary[:3000]}
+{code_section}
 
 Already implemented features (do NOT repeat):
 {chr(10).join(existing_features) if existing_features else 'None'}

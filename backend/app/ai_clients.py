@@ -51,6 +51,7 @@ def is_ollama_available() -> bool:
 def get_ollama_model() -> str:
     preferred = [
         settings.ollama_model,
+        "gemma3:4b",
         "qwen2.5-coder:7b",
         "qwen2.5:32b",
         "llama3.2:latest",
@@ -496,3 +497,61 @@ def _call_anthropic_json(
     if not all(key in parsed for key in required):
         raise RuntimeError("anthropic JSON payload missing required fields")
     return ToolCallResult(provider="anthropic", tool_input=parsed, tokens=tokens)
+
+
+# ── OllamaClient: async text generation (gemma3:4b and other local models) ───
+
+class OllamaClient:
+    """Async LLM client that talks to a local Ollama server.
+
+    Defaults to gemma3:4b but respects the OLLAMA_MODEL env var and
+    settings.ollama_model.  Falls back gracefully when Ollama is offline.
+
+    Usage::
+
+        client = OllamaClient()
+        text = await client.generate("Summarise this PR", system="You are a helpful assistant.")
+    """
+
+    def __init__(self):
+        self.base_url = get_ollama_base_url() + "/v1"
+        self.model = settings.ollama_model or os.environ.get("OLLAMA_MODEL", "gemma3:4b")
+
+    async def generate(
+        self, prompt: str, system: str = "", max_tokens: int = 4096
+    ) -> str:
+        """Send a chat completion request and return the response text.
+
+        Returns an empty string on any error so callers can decide whether to
+        fall back to a cloud provider.
+        """
+        messages: List[Dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                r = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": max_tokens,
+                    },
+                    headers={"Authorization": "Bearer ollama"},
+                )
+                r.raise_for_status()
+                return r.json()["choices"][0]["message"]["content"]
+        except Exception:
+            return ""
+
+
+def get_llm_client() -> OllamaClient:
+    """Return an OllamaClient configured for the active local model.
+
+    When LLM_PROVIDER=ollama (or no cloud API keys are set), this is the
+    primary client.  Cloud providers are still used by call_tool_with_fallback
+    for structured tool-call workflows.
+    """
+    return OllamaClient()

@@ -116,6 +116,63 @@ class ProductAgent:
             except Exception as e:
                 self.log(f"Snapshot restore failed: {e}")
 
+    def _schedule_rag_indexing(self, files: Dict[str, str]):
+        """Kick off RAG indexing in the background without blocking the agent.
+
+        Reads files from the repo and embeds them via Ollama.  Silently
+        skips if Ollama is unavailable or indexing fails.
+        """
+        product_id = self.product.id
+        db = self.db
+
+        def _run_index():
+            try:
+                from .services.rag_service import index_repo
+                count = index_repo(db, product_id, files)
+                if count:
+                    append_log(self.job_id, f"[{self.product.name}] RAG: indexed {count} chunks")
+            except Exception:
+                pass  # RAG indexing is best-effort; never crash the agent
+
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, _run_index)
+
+    def _read_repo_files_for_rag(self) -> Dict[str, str]:
+        """Read text files from the repo for RAG indexing.
+
+        Limits to 200 files and 100 KB per file to stay within memory bounds.
+        """
+        path = Path(self.path)
+        skip = {"node_modules", ".git", "venv", ".venv", "__pycache__", "dist", "build"}
+        text_exts = {
+            ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java",
+            ".rb", ".php", ".swift", ".kt", ".c", ".cpp", ".h", ".cs",
+            ".md", ".txt", ".toml", ".yaml", ".yml", ".json", ".env.example",
+            ".sh", ".bash", ".zsh", ".sql", ".html", ".css", ".scss",
+        }
+        files: Dict[str, str] = {}
+        try:
+            for f in sorted(path.rglob("*")):
+                if len(files) >= 200:
+                    break
+                if not f.is_file():
+                    continue
+                if any(s in str(f) for s in skip):
+                    continue
+                if f.suffix.lower() not in text_exts:
+                    continue
+                try:
+                    content = f.read_text(encoding="utf-8", errors="replace")
+                    if len(content) > 100_000:
+                        content = content[:100_000]
+                    rel = str(f.relative_to(path))
+                    files[rel] = content
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return files
+
     async def _execute(self):
         self.log("Analyzing repository...")
 
@@ -142,6 +199,15 @@ class ProductAgent:
         version_before = get_current_version(self.path)
         self.run_item.version_before = version_before
 
+        # ── RAG: read files and kick off background indexing ─────────────────
+        # This is non-blocking — the scan response is returned immediately and
+        # the embeddings are stored asynchronously.  On the next agent run the
+        # indexed chunks will be available for retrieval.
+        repo_files = self._read_repo_files_for_rag()
+        if repo_files:
+            self.log(f"RAG indexing {len(repo_files)} files in background...")
+            self._schedule_rag_indexing(repo_files)
+
         # Load / generate proposal
         mode = self.product.mode
         if self.product.manual_feature:
@@ -153,6 +219,8 @@ class ProductAgent:
                 readme, file_summary,
                 self._get_existing_features(),
                 manual_override=self.product.manual_feature,
+                db=self.db,
+                product_id=self.product.id,
             )
             self.total_tokens += tokens
         else:
@@ -166,6 +234,8 @@ class ProductAgent:
                     self.product.name, self.path, self.product.detected_stack,
                     readme, file_summary,
                     self._get_existing_features(),
+                    db=self.db,
+                    product_id=self.product.id,
                 )
                 self.total_tokens += tokens
 

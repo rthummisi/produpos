@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean, Float, Text, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, String, Integer, Boolean, Float, Text, DateTime, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from .db import Base
@@ -132,3 +132,28 @@ class Setting(Base):
     key = Column(String, primary_key=True)
     value = Column(Text, default="")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CodeChunk(Base):
+    """Stores embedded code chunks for RAG-based feature planning.
+
+    The embedding vector is serialised as a JSON string (embedding_json) so
+    that no pgvector extension is required — cosine similarity is computed in
+    Python by rag_service.retrieve_relevant_code().
+    """
+
+    __tablename__ = "code_chunks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    product_id = Column(String, nullable=False, index=True)
+    file_path = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    chunk_index = Column(Integer, nullable=False, default=0)
+    content_hash = Column(String(32))
+    # JSON-serialised list[float] — no pgvector needed for SQLite
+    embedding_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("product_id", "file_path", "chunk_index", name="uq_code_chunk"),
+    )
