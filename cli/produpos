@@ -43,6 +43,25 @@ if [ ! -d "$VENV" ]; then
   "$VENV/bin/pip" install --quiet --upgrade pip
   "$VENV/bin/pip" install --quiet -r "$PRODUPOOS_ROOT/backend/requirements.txt"
   echo -e "${GREEN}✓ Backend environment ready${NC}"
+else
+  # Sync any newly added packages (e.g. playwright added in v2.1.0)
+  "$VENV/bin/pip" install --quiet -r "$PRODUPOOS_ROOT/backend/requirements.txt" 2>/dev/null || true
+fi
+
+# Install Playwright browser (agent-browser for E2E testing) if not already present
+if ! "$VENV/bin/python" -c "from playwright.sync_api import sync_playwright" &>/dev/null 2>&1; then
+  echo -e "${YELLOW}Installing Playwright (E2E agent-browser)...${NC}"
+  "$VENV/bin/pip" install --quiet playwright
+fi
+if ! "$VENV/bin/python" -c "
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    p.chromium.executable_path
+" &>/dev/null 2>&1; then
+  echo -e "${YELLOW}Installing Chromium browser for E2E testing...${NC}"
+  "$VENV/bin/playwright" install chromium --with-deps 2>/dev/null || \
+  "$VENV/bin/playwright" install chromium 2>/dev/null || true
+  echo -e "${GREEN}✓ Chromium ready${NC}"
 fi
 
 # Install frontend if needed

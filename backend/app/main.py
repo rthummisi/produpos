@@ -33,7 +33,15 @@ from .safety import get_git_status, restore_snapshot
 from .job_manager import get_logs, subscribe, unsubscribe
 from .scheduler import scheduler_loop, create_schedule
 
-app = FastAPI(title="ProdupOS", version="1.0.0")
+def _read_version() -> str:
+    ver_file = Path(settings.produpOS_root) / "VERSION"
+    try:
+        return ver_file.read_text().strip()
+    except Exception:
+        return "2.1.0"
+
+_VERSION = _read_version()
+app = FastAPI(title="ProdupOS", version=_VERSION)
 
 app.add_middleware(
     CORSMiddleware,
@@ -150,7 +158,7 @@ def health():
     guardian_summary = _guardian_report.get("summary", {})
     return {
         "status": "ok",
-        "version": "1.0.0",
+        "version": _VERSION,
         "backend_port": settings.backend_port,
         "projects_root": settings.projects_root,
         "ai_enabled": any_ai_provider_configured(),

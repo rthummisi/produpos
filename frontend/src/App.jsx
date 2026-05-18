@@ -34,7 +34,7 @@ export default function App() {
           <aside className="w-56 shrink-0 bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800 flex flex-col">
             <div className="px-6 py-6 border-b border-gray-100 dark:border-gray-800">
               <div className="text-lg font-semibold tracking-tight text-gray-900 dark:text-white">ProdupOS</div>
-              <div className="text-xs text-gray-400 mt-0.5">v1.0.0 · AI Product OS</div>
+              <div className="text-xs text-gray-400 mt-0.5">v2.1.0 · AI Product OS</div>
             </div>
             <nav className="flex-1 py-4 px-3 space-y-0.5">
               {NAV.map(({ to, label, icon }) => (
