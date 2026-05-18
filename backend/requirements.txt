@@ -12,3 +12,4 @@ rich==13.9.4
 packaging==24.2
 toml==0.10.2
 pypdf==5.5.0
+playwright>=1.48.0

@@ -74,6 +74,8 @@ class ProductOut(BaseModel):
     last_update_at: Optional[datetime] = None
     last_built_feature_title: Optional[str] = None
     last_built_feature_at: Optional[datetime] = None
+    last_e2e_status: Optional[str] = None
+    last_e2e_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -208,3 +210,18 @@ class RollbackRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     format: str = "json"  # json | md | csv
+
+
+class E2ETestResultOut(BaseModel):
+    id: str
+    product_id: str
+    job_id: str
+    status: str
+    summary: str
+    details: Optional[str] = None
+    triggered_by: str
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

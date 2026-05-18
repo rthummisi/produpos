@@ -105,6 +105,9 @@ function ProductCard({ product, onRefresh }) {
   const [showBacklog, setShowBacklog] = useState(false)
   const [generatingBacklog, setGeneratingBacklog] = useState(false)
   const [running, setRunning] = useState(false)
+  const [e2eTesting, setE2ETesting] = useState(false)
+  const [runAndTesting, setRunAndTesting] = useState(false)
+  const [e2eResult, setE2EResult] = useState(null)
   const [exclusions, setExclusions] = useState(product.per_product_exclusions || '')
   const [selected, setSelected] = useState(product.selected !== false)
 
@@ -186,6 +189,42 @@ function ProductCard({ product, onRefresh }) {
     finally { setRunning(false) }
   }
 
+  const testE2E = async () => {
+    setE2ETesting(true)
+    setE2EResult(null)
+    try {
+      const { job_id } = await api.runE2ETest(product.id)
+      // Poll until the test finishes
+      for (let i = 0; i < 90; i++) {
+        await new Promise(r => setTimeout(r, 2000))
+        const results = await api.getE2EResults(product.id)
+        const latest = results?.[0]
+        if (latest && latest.status !== 'running' && latest.status !== 'pending') {
+          setE2EResult(latest)
+          onRefresh()
+          break
+        }
+      }
+    } catch (e) {
+      setE2EResult({ status: 'error', summary: e.message })
+    } finally {
+      setE2ETesting(false)
+    }
+  }
+
+  const runAndE2E = async () => {
+    setRunAndTesting(true)
+    try {
+      await api.runAndE2E(product.id)
+      onRefresh()
+      setTimeout(() => nav('/console'), 600)
+    } catch (e) {
+      alert('Failed to start: ' + e.message)
+    } finally {
+      setRunAndTesting(false)
+    }
+  }
+
   return (
     <div className={`bg-white dark:bg-gray-900 rounded-2xl border transition-all ${
       selected
@@ -221,6 +260,19 @@ function ProductCard({ product, onRefresh }) {
               'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400'
             }`}>
               {Math.round(product.health_score * 100)}% health
+            </span>
+          )}
+          {product.last_e2e_status && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+              product.last_e2e_status === 'passed'
+                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400'
+                : product.last_e2e_status === 'failed'
+                ? 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400'
+                : product.last_e2e_status === 'no_tests'
+                ? 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+                : 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
+            }`}>
+              E2E {product.last_e2e_status === 'passed' ? '✓' : product.last_e2e_status === 'failed' ? '✗' : '·'} {product.last_e2e_status}
             </span>
           )}
           <span className="text-xs text-gray-400">
@@ -378,15 +430,82 @@ function ProductCard({ product, onRefresh }) {
 
         {showDiff && <DiffViewer diffs={diffs} />}
 
-        {/* Run this one */}
-        <div className="pt-1">
-          <button
-            onClick={runSingle}
-            disabled={running}
-            className="px-4 py-1.5 text-xs font-medium bg-gray-900 text-white dark:bg-white dark:text-gray-900 rounded-xl hover:opacity-90 disabled:opacity-50 transition-opacity"
-          >
-            {running ? 'Running...' : `Run ${product.name} only`}
-          </button>
+        {/* Actions — build, E2E test, run+E2E */}
+        <div className="pt-1 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={runSingle}
+              disabled={running || e2eTesting || runAndTesting}
+              className="px-4 py-1.5 text-xs font-medium bg-gray-900 text-white dark:bg-white dark:text-gray-900 rounded-xl hover:opacity-90 disabled:opacity-50 transition-opacity"
+            >
+              {running ? 'Running...' : `Run ${product.name} only`}
+            </button>
+
+            <button
+              onClick={testE2E}
+              disabled={running || e2eTesting || runAndTesting}
+              className="px-4 py-1.5 text-xs font-medium bg-blue-600 text-white dark:bg-blue-500 rounded-xl hover:opacity-90 disabled:opacity-50 transition-opacity"
+            >
+              {e2eTesting ? 'Testing E2E...' : 'E2E Testing'}
+            </button>
+
+            <button
+              onClick={runAndE2E}
+              disabled={running || e2eTesting || runAndTesting}
+              className="px-4 py-1.5 text-xs font-medium bg-purple-700 text-white dark:bg-purple-600 rounded-xl hover:opacity-90 disabled:opacity-50 transition-opacity"
+            >
+              {runAndTesting ? 'Building & Testing...' : `Run ${product.name} & Test E2E`}
+            </button>
+          </div>
+
+          {/* Inline E2E result */}
+          {(e2eTesting || e2eResult) && (
+            <div className={`rounded-xl border px-4 py-3 text-xs ${
+              e2eTesting
+                ? 'border-blue-100 bg-blue-50 dark:bg-blue-900/10 dark:border-blue-900/30'
+                : e2eResult?.status === 'passed'
+                ? 'border-emerald-100 bg-emerald-50 dark:bg-emerald-900/10 dark:border-emerald-900/30'
+                : e2eResult?.status === 'failed'
+                ? 'border-red-100 bg-red-50 dark:bg-red-900/10 dark:border-red-900/30'
+                : 'border-gray-100 bg-gray-50 dark:bg-gray-800 dark:border-gray-700'
+            }`}>
+              {e2eTesting ? (
+                <div className="flex items-center gap-2 text-blue-700 dark:text-blue-300">
+                  <span className="animate-pulse">▋</span>
+                  <span>Running E2E tests via agent-browser...</span>
+                </div>
+              ) : e2eResult ? (
+                <div>
+                  <div className={`font-medium mb-1 ${
+                    e2eResult.status === 'passed' ? 'text-emerald-700 dark:text-emerald-400' :
+                    e2eResult.status === 'failed' ? 'text-red-700 dark:text-red-400' :
+                    'text-gray-600 dark:text-gray-300'
+                  }`}>
+                    E2E {e2eResult.status === 'passed' ? '✓ Passed' :
+                         e2eResult.status === 'failed' ? '✗ Failed' :
+                         e2eResult.status === 'no_tests' ? '— No tests' : e2eResult.status}
+                    {e2eResult.summary && <span className="font-normal text-gray-500 dark:text-gray-400 ml-2">{e2eResult.summary}</span>}
+                  </div>
+                  {e2eResult.details && (() => {
+                    let checks = []
+                    try { checks = JSON.parse(e2eResult.details) } catch {}
+                    return checks.length > 0 ? (
+                      <div className="space-y-0.5 mt-1">
+                        {checks.map((c, i) => (
+                          <div key={i} className={`flex items-center gap-1.5 ${c.passed ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                            <span>{c.passed ? '✓' : '✗'}</span>
+                            <span>{c.name}</span>
+                            {c.status_code && <span className="text-gray-400">({c.status_code})</span>}
+                            {c.error && <span className="text-gray-400 truncate max-w-xs">{c.error}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null
+                  })()}
+                </div>
+              ) : null}
+            </div>
+          )}
         </div>
       </div>
 

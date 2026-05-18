@@ -1,5 +1,39 @@
 # ProdupOS Changelog
 
+## [2.1.0] — 2026-05-17
+
+### Added — Per-Product E2E Testing (agent-browser)
+
+#### Two new buttons on every product card (Feature Review page) and Products scan table:
+
+- **"E2E Testing"** — runs an end-to-end test of the product in-place, immediately showing inline pass/fail results with per-check details. No navigation required; results appear directly in the product card.
+- **"Run {Product} & Test E2E"** — builds the product via the AI agent *and* then immediately runs E2E tests against the newly built version. Streams combined build + test logs to the Run Console.
+
+#### E2E test engine (`backend/app/e2e_tester.py`):
+- **Agent-browser via Playwright** (`playwright>=1.48.0`) — launches a headless Chromium browser, navigates to the product's auto-detected URL, and verifies each AI-generated check scenario.
+- **AI test-plan generation** — uses the configured AI provider (Gemini / Anthropic / Groq / Ollama) to generate 3–5 realistic browser/HTTP test scenarios from the product's README and file structure.
+- **HTTP fallback** — if Playwright browsers are not installed, falls back to `httpx` HTTP checks automatically.
+- **Existing test suite runner** — detects and runs `pytest` (Python) and `npm test` (Node) if present.
+- **Auto start-command detection** — reads `vite.config.*`, `package.json`, `manage.py`, `main.py`, `go.mod`, etc. to determine how to start the product and which port/URL to test.
+- **Graceful port detection** — if the app is already running on the expected port, skips starting it.
+- Results stored in new `e2e_test_results` DB table; latest status cached on the `products` row as `last_e2e_status`.
+
+#### New API endpoints:
+- `POST /api/products/{id}/e2e-test` — trigger E2E test, returns `{job_id}` for WebSocket streaming.
+- `POST /api/products/{id}/run-and-e2e` — build product then run E2E; E2E logs appended to the same run job so Console shows everything in one stream.
+- `GET /api/products/{id}/e2e-results` — list recent E2E test results for a product.
+
+#### UI changes:
+- **Feature Review** — each `ProductCard` gains three action buttons, a live pulsing "Testing E2E…" state, and an inline result block showing per-check pass/fail with HTTP status codes.
+- **E2E status badge** in the card header: green `E2E ✓ passed`, red `E2E ✗ failed`, gray `E2E · no_tests`.
+- **Products scan table** — new "E2E" column shows cached last status badge; "E2E Testing" button in Actions column starts a test and updates the badge inline.
+
+#### Schema changes:
+- `products` table: new `last_e2e_status` (TEXT) and `last_e2e_at` (DATETIME) columns, migrated automatically at startup.
+- New `e2e_test_results` table with full per-check JSON details.
+
+---
+
 ## [1.1.0] — 2026-05-09
 
 ### Added — Startup Guardian

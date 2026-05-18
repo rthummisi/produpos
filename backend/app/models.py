@@ -27,11 +27,14 @@ class Product(Base):
     dependency_report = Column(Text, default="")  # JSON
     feature_backlog = Column(Text, default="")  # JSON array of past proposals
     code_confidence_score = Column(Float, default=0.0)
+    last_e2e_status = Column(String, default="")   # passed | failed | no_tests | error
+    last_e2e_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     run_items = relationship("RunItem", back_populates="product")
     snapshots = relationship("Snapshot", back_populates="product")
+    e2e_results = relationship("E2ETestResult", back_populates="product")
 
 
 class Run(Base):
@@ -132,6 +135,24 @@ class Setting(Base):
     key = Column(String, primary_key=True)
     value = Column(Text, default="")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class E2ETestResult(Base):
+    """Stores the outcome of an E2E browser/HTTP test run for one product."""
+
+    __tablename__ = "e2e_test_results"
+
+    id = Column(String, primary_key=True)
+    product_id = Column(String, ForeignKey("products.id"))
+    job_id = Column(String, default="")
+    status = Column(String, default="pending")  # pending | running | passed | failed | no_tests | error
+    summary = Column(Text, default="")
+    details = Column(Text, default="")  # JSON array of individual check results
+    triggered_by = Column(String, default="manual")  # manual | post_build
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    product = relationship("Product", back_populates="e2e_results")
 
 
 class CodeChunk(Base):

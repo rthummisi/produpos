@@ -7,10 +7,18 @@ const BADGE = {
   dirty: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400',
 }
 
+const E2E_BADGE = {
+  passed: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400',
+  failed: 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400',
+  no_tests: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
+  error: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400',
+}
+
 export default function ProductScanTable() {
   const [products, setProducts] = useState([])
   const [scanning, setScanning] = useState(false)
   const [analyzing, setAnalyzing] = useState({})
+  const [e2eTesting, setE2ETesting] = useState({})
   const [filter, setFilter] = useState('all')
 
   useEffect(() => { api.products().then(setProducts).catch(() => {}) }, [])
@@ -34,6 +42,27 @@ export default function ProductScanTable() {
   const setSkip = async (id, skip) => {
     await api.setSkipPersistent(id, skip)
     setProducts(await api.products())
+  }
+
+  const runE2E = async (id) => {
+    setE2ETesting(t => ({ ...t, [id]: 'running' }))
+    try {
+      await api.runE2ETest(id)
+      // Poll until complete
+      for (let i = 0; i < 90; i++) {
+        await new Promise(r => setTimeout(r, 2000))
+        const results = await api.getE2EResults(id)
+        const latest = results?.[0]
+        if (latest && latest.status !== 'running' && latest.status !== 'pending') {
+          setE2ETesting(t => ({ ...t, [id]: latest.status }))
+          setProducts(await api.products())
+          return
+        }
+      }
+      setE2ETesting(t => ({ ...t, [id]: 'error' }))
+    } catch {
+      setE2ETesting(t => ({ ...t, [id]: 'error' }))
+    }
   }
 
   const filtered = products.filter(p => {
@@ -84,7 +113,7 @@ export default function ProductScanTable() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-100 dark:border-gray-800">
-              {['Product', 'Stack', 'Git', 'Confidence', 'Health', 'Status', 'Actions'].map(h => (
+              {['Product', 'Stack', 'Git', 'Confidence', 'Health', 'Status', 'E2E', 'Actions'].map(h => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
                   {h}
                 </th>
@@ -150,7 +179,22 @@ export default function ProductScanTable() {
                   )}
                 </td>
                 <td className="px-4 py-3.5">
-                  <div className="flex items-center gap-2">
+                  {(() => {
+                    const state = e2eTesting[p.id] || p.last_e2e_status
+                    if (!state) return <span className="text-xs text-gray-300 dark:text-gray-600">—</span>
+                    const label = state === 'running' ? 'Testing...' :
+                      state === 'passed' ? 'E2E ✓' :
+                      state === 'failed' ? 'E2E ✗' :
+                      state === 'no_tests' ? 'No tests' : state
+                    return (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${E2E_BADGE[state] || E2E_BADGE.error}`}>
+                        {label}
+                      </span>
+                    )
+                  })()}
+                </td>
+                <td className="px-4 py-3.5">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {p.updatable && (
                       <button
                         onClick={() => analyze(p.id)}
@@ -160,6 +204,13 @@ export default function ProductScanTable() {
                         {analyzing[p.id] ? 'Analyzing...' : 'Analyze'}
                       </button>
                     )}
+                    <button
+                      onClick={() => runE2E(p.id)}
+                      disabled={e2eTesting[p.id] === 'running'}
+                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+                    >
+                      {e2eTesting[p.id] === 'running' ? 'Testing...' : 'E2E Testing'}
+                    </button>
                     <button
                       onClick={() => setSkip(p.id, !p.skip_persistent)}
                       className="text-xs text-gray-400 hover:text-red-500 dark:hover:text-red-400"

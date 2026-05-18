@@ -18,9 +18,10 @@ from sqlalchemy.orm import Session
 from .config import settings, apply_setting_override
 from .ai_clients import any_ai_provider_configured, provider_status
 from .db import get_db, init_db, SessionLocal
-from .models import Product, Run, RunItem, Snapshot, FeatureBacklogItem, ScheduledRun, Setting
+from .models import Product, Run, RunItem, Snapshot, FeatureBacklogItem, ScheduledRun, Setting, E2ETestResult
 from .schemas import (
     ProductOut, RunOut, RunItemOut, SnapshotOut, FeatureBacklogItemOut, ScheduledRunOut,
+    E2ETestResultOut,
     SetModeRequest, SetManualFeatureRequest, SetExclusionsRequest, SetSkipPersistentRequest,
     RunRequest, ScheduleCreateRequest, SettingsUpdateRequest, RollbackRequest,
 )
@@ -88,9 +89,30 @@ def _extract_manual_feature_from_upload(upload: UploadFile) -> str:
     raise HTTPException(400, "Unsupported file type. Use .txt, .md, .pdf, or .docx")
 
 
+def _migrate_db():
+    """Add columns introduced after the initial schema was created."""
+    import sqlite3
+    db_path = Path(settings.data_dir) / "produpos.db"
+    if not db_path.exists():
+        return
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    for sql in [
+        "ALTER TABLE products ADD COLUMN last_e2e_status TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN last_e2e_at DATETIME",
+    ]:
+        try:
+            cur.execute(sql)
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+    conn.close()
+
+
 @app.on_event("startup")
 async def startup():
     init_db()
+    _migrate_db()
     db = SessionLocal()
     try:
         for row in db.query(Setting).all():
@@ -532,6 +554,83 @@ def get_run(run_id: str, db: Session = Depends(get_db)):
 @app.get("/api/jobs/{job_id}/logs")
 def get_job_logs(job_id: str):
     return {"logs": get_logs(job_id)}
+
+
+# ─── E2E Testing ──────────────────────────────────────────────────────────────
+
+@app.post("/api/products/{product_id}/e2e-test")
+async def start_e2e_test(
+    product_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Start an E2E test for a single product (browser + HTTP + test suite)."""
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        raise HTTPException(404, "Product not found")
+
+    job_id = str(uuid.uuid4())
+    from .job_manager import init_job_log as _init
+    _init(job_id)
+
+    async def _run():
+        from .e2e_tester import run_e2e_test
+        await run_e2e_test(
+            product_id=product_id,
+            product_name=p.name,
+            product_path=p.path,
+            detected_stack=p.detected_stack or "",
+            job_id=job_id,
+            db=db,
+            triggered_by="manual",
+        )
+
+    background_tasks.add_task(_run)
+    return {"status": "started", "product_id": product_id, "job_id": job_id}
+
+
+@app.post("/api/products/{product_id}/run-and-e2e")
+async def run_and_e2e(
+    product_id: str,
+    dry_run: bool = False,
+    background_tasks: BackgroundTasks = None,
+    db: Session = Depends(get_db),
+):
+    """Build the product (run the AI agent) then immediately run E2E tests."""
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        raise HTTPException(404, "Product not found")
+
+    async def _run():
+        from .agent_orchestrator import run_products
+        from .e2e_tester import run_e2e_test
+
+        run_id = await run_products(db, [product_id], dry_run)
+        # Append E2E logs to the same job (run_id == job_id) so Console shows both
+        await run_e2e_test(
+            product_id=product_id,
+            product_name=p.name,
+            product_path=p.path,
+            detected_stack=p.detected_stack or "",
+            job_id=run_id,
+            db=db,
+            triggered_by="post_build",
+        )
+
+    background_tasks.add_task(_run)
+    return {"status": "started", "product_id": product_id}
+
+
+@app.get("/api/products/{product_id}/e2e-results", response_model=List[E2ETestResultOut])
+def get_e2e_results(product_id: str, limit: int = 10, db: Session = Depends(get_db)):
+    """Return the most recent E2E test results for a product."""
+    return (
+        db.query(E2ETestResult)
+        .filter(E2ETestResult.product_id == product_id)
+        .order_by(E2ETestResult.started_at.desc())
+        .limit(limit)
+        .all()
+    )
 
 
 # ─── Reports ──────────────────────────────────────────────────────────────────

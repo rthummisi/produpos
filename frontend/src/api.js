@@ -49,6 +49,10 @@ export const api = {
   rollback: (id, snapshot_id) => req('POST', `/api/products/${id}/rollback`, { snapshot_id }),
   getDiff: (pid, runItemId) => req('GET', `/api/products/${pid}/diff?run_item_id=${runItemId}`),
 
+  runE2ETest: (id) => req('POST', `/api/products/${id}/e2e-test`),
+  runAndE2E: (id, dry_run = false) => req('POST', `/api/products/${id}/run-and-e2e?dry_run=${dry_run}`),
+  getE2EResults: (id) => req('GET', `/api/products/${id}/e2e-results`),
+
   startRun: (product_ids, dry_run) => req('POST', '/api/run', { product_ids, dry_run }),
   runSingle: (id, dry_run = false) => req('POST', `/api/run/${id}?dry_run=${dry_run}`),
   runs: () => req('GET', '/api/runs'),
